@@ -1,0 +1,7 @@
+if(NOT DEFINED PLUGIN_BINARY_PATH)
+  message(FATAL_ERROR "PLUGIN_BINARY_PATH is not defined")
+endif()
+
+if(NOT EXISTS "${PLUGIN_BINARY_PATH}")
+  message(FATAL_ERROR "Plugin binary not found: ${PLUGIN_BINARY_PATH}")
+endif()

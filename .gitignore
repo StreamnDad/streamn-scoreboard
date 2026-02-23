@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+build-*/
+*.gcov
+
+# CMake generated
+CMakeUserPresets.json
+compile_commands.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/*.log
+
+# AI development docs (keep locally, exclude from public repo)
+CLAUDE.md
+AGENTS.md

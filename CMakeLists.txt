@@ -1,0 +1,287 @@
+cmake_minimum_required(VERSION 3.21)
+
+project(streamn_obs_scoreboard VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(ENABLE_WERROR "Treat warnings as errors" OFF)
+option(ENABLE_COVERAGE "Enable coverage instrumentation for unit-test targets" OFF)
+option(BUILD_PLUGIN_MODULE "Build OBS plugin module target" ON)
+
+set(_obs_include_dirs "")
+set(_obs_libraries "")
+set(_obs_library_dirs "")
+set(_obs_cflags_other "")
+set(_obs_ldflags_other "")
+set(_extra_include_dirs "")
+set(_obs_frontend_include_dirs "")
+set(_obs_frontend_api_library "")
+
+if(BUILD_PLUGIN_MODULE)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(LIBOBS QUIET libobs)
+  endif()
+
+  if(LIBOBS_FOUND)
+    set(_obs_include_dirs ${LIBOBS_INCLUDE_DIRS})
+    set(_obs_libraries ${LIBOBS_LIBRARIES})
+    set(_obs_library_dirs ${LIBOBS_LIBRARY_DIRS})
+    set(_obs_cflags_other ${LIBOBS_CFLAGS_OTHER})
+    set(_obs_ldflags_other ${LIBOBS_LDFLAGS_OTHER})
+  else()
+    set(OBS_INCLUDE_DIR "" CACHE PATH "Path to OBS include directory containing obs-module.h")
+    set(OBS_LIBRARY "" CACHE FILEPATH "Path to libobs library file")
+    set(OBS_SOURCE_DIR "" CACHE PATH "Path to OBS source directory (contains frontend/api/obs-frontend-api.h)")
+    set(OBS_FRONTEND_API_LIBRARY "" CACHE FILEPATH "Path to obs-frontend-api library file")
+    set(SIMDE_INCLUDE_DIR "" CACHE PATH "Path containing simde/x86/sse2.h (optional override)")
+
+    if(NOT OBS_INCLUDE_DIR OR NOT OBS_LIBRARY)
+      message(FATAL_ERROR
+        "libobs was not found via pkg-config. Set OBS_INCLUDE_DIR and OBS_LIBRARY "
+        "to a local OBS SDK/build path.")
+    endif()
+
+    set(_obs_include_dirs ${OBS_INCLUDE_DIR})
+    set(_obs_libraries ${OBS_LIBRARY})
+
+    if(NOT OBS_SOURCE_DIR)
+      get_filename_component(_obs_source_guess "${OBS_INCLUDE_DIR}" DIRECTORY)
+      set(OBS_SOURCE_DIR "${_obs_source_guess}" CACHE PATH "Path to OBS source directory (contains frontend/api/obs-frontend-api.h)" FORCE)
+    endif()
+
+    if(EXISTS "${OBS_SOURCE_DIR}/frontend/api/obs-frontend-api.h")
+      list(APPEND _obs_frontend_include_dirs "${OBS_SOURCE_DIR}")
+    endif()
+
+    if(OBS_FRONTEND_API_LIBRARY)
+      set(_obs_frontend_api_library "${OBS_FRONTEND_API_LIBRARY}")
+    elseif(EXISTS "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
+      set(_obs_frontend_api_library "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
+    else()
+      find_library(_obs_frontend_api_library
+        NAMES obs-frontend-api obs-frontend-api.dylib
+        PATHS
+          /Applications/OBS.app/Contents/Frameworks
+          /opt/homebrew/lib
+          /usr/local/lib
+      )
+    endif()
+
+    if(NOT SIMDE_INCLUDE_DIR)
+      unset(SIMDE_INCLUDE_DIR CACHE)
+      find_path(SIMDE_INCLUDE_DIR simde/x86/sse2.h
+        PATHS
+          /opt/homebrew/include
+          /usr/local/include
+      )
+    endif()
+
+    if(SIMDE_INCLUDE_DIR)
+      list(APPEND _extra_include_dirs ${SIMDE_INCLUDE_DIR})
+    else()
+      message(WARNING
+        "simde headers were not found. Install simde (e.g. 'brew install simde') "
+        "or set -DSIMDE_INCLUDE_DIR=/path/to/include.")
+    endif()
+  endif()
+endif()
+
+add_library(scoreboard_core STATIC
+  src/scoreboard-core.c
+)
+
+target_include_directories(scoreboard_core
+  PRIVATE
+    include
+)
+
+if(ENABLE_COVERAGE)
+  target_compile_options(scoreboard_core PRIVATE -O0 -g --coverage)
+  target_link_options(scoreboard_core PRIVATE --coverage)
+endif()
+
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/plugin-version.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/plugin-version.h
+)
+
+if(BUILD_PLUGIN_MODULE)
+  set(_qt_compat_dir "${CMAKE_CURRENT_BINARY_DIR}/qt-compat")
+  file(MAKE_DIRECTORY "${_qt_compat_dir}")
+  foreach(_qt_mod QtCore QtGui QtWidgets)
+    if(EXISTS "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers")
+      execute_process(
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+          "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers"
+          "${_qt_compat_dir}/${_qt_mod}"
+      )
+    endif()
+  endforeach()
+
+  if(NOT _obs_frontend_api_library)
+    message(FATAL_ERROR
+      "obs-frontend-api library not found. Set OBS_SOURCE_DIR/OBS paths so frontend APIs are available.")
+  endif()
+
+  if(NOT _obs_frontend_include_dirs)
+    message(FATAL_ERROR
+      "OBS frontend headers not found. Set OBS_SOURCE_DIR so frontend/api/obs-frontend-api.h is available.")
+  endif()
+
+  find_library(_obs_qt_core_library
+    NAMES QtCore
+    PATHS /Applications/OBS.app/Contents/Frameworks
+    NO_DEFAULT_PATH
+  )
+  find_library(_obs_qt_gui_library
+    NAMES QtGui
+    PATHS /Applications/OBS.app/Contents/Frameworks
+    NO_DEFAULT_PATH
+  )
+  find_library(_obs_qt_widgets_library
+    NAMES QtWidgets
+    PATHS /Applications/OBS.app/Contents/Frameworks
+    NO_DEFAULT_PATH
+  )
+
+  if(NOT _obs_qt_core_library OR NOT _obs_qt_gui_library OR NOT _obs_qt_widgets_library)
+    message(FATAL_ERROR
+      "OBS Qt frameworks not found under /Applications/OBS.app/Contents/Frameworks.")
+  endif()
+
+  add_library(streamn_obs_scoreboard MODULE
+    src/plugin-main.c
+    src/plugin-dock.cpp
+  )
+
+  target_include_directories(streamn_obs_scoreboard
+    PRIVATE
+      include
+      ${_qt_compat_dir}
+      ${CMAKE_CURRENT_BINARY_DIR}
+  )
+
+  target_include_directories(streamn_obs_scoreboard
+    SYSTEM PRIVATE
+      ${_obs_include_dirs}
+      ${_obs_frontend_include_dirs}
+      ${_extra_include_dirs}
+  )
+
+  target_link_directories(streamn_obs_scoreboard
+    PRIVATE
+      ${_obs_library_dirs}
+  )
+
+  target_compile_options(streamn_obs_scoreboard
+    PRIVATE
+      -F/Applications/OBS.app/Contents/Frameworks
+      -F/opt/homebrew/opt/qt/lib
+      -Wall
+      -Wextra
+      -Wpedantic
+  )
+
+  if(ENABLE_WERROR)
+    target_compile_options(streamn_obs_scoreboard PRIVATE -Werror)
+  endif()
+
+  target_link_libraries(streamn_obs_scoreboard
+    PRIVATE
+      scoreboard_core
+      ${_obs_libraries}
+      ${_obs_frontend_api_library}
+      ${_obs_qt_core_library}
+      ${_obs_qt_gui_library}
+      ${_obs_qt_widgets_library}
+  )
+
+  target_compile_definitions(streamn_obs_scoreboard
+    PRIVATE
+      QT_NO_VERSION_TAGGING
+  )
+
+  target_compile_options(streamn_obs_scoreboard
+    PRIVATE
+      ${_obs_cflags_other}
+  )
+
+  target_link_options(streamn_obs_scoreboard
+    PRIVATE
+      ${_obs_ldflags_other}
+  )
+
+  set_target_properties(streamn_obs_scoreboard PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "streamn-obs-scoreboard"
+  )
+endif()
+
+enable_testing()
+
+function(add_core_test test_target test_source)
+  add_executable(${test_target}
+    ${test_source}
+  )
+
+  target_include_directories(${test_target}
+    PRIVATE
+      include
+  )
+
+  target_link_libraries(${test_target}
+    PRIVATE
+      scoreboard_core
+  )
+
+  if(ENABLE_COVERAGE)
+    target_compile_options(${test_target} PRIVATE -O0 -g --coverage)
+    target_link_options(${test_target} PRIVATE --coverage)
+  endif()
+endfunction()
+
+add_core_test(scoreboard_core_tests tests/test-scoreboard-core.c)
+add_core_test(scoreboard_core_scoring_tests tests/test-scoreboard-core-scoring.c)
+add_core_test(scoreboard_core_penalties_tests tests/test-scoreboard-core-penalties.c)
+add_core_test(scoreboard_core_persistence_tests tests/test-scoreboard-core-persistence.c)
+
+if(BUILD_PLUGIN_MODULE)
+  set(PLUGIN_BINARY_PATH "$<TARGET_FILE:streamn_obs_scoreboard>")
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-plugin-binary.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/check-plugin-binary.cmake
+    @ONLY
+  )
+
+  add_test(
+    NAME plugin-binary-exists
+    COMMAND ${CMAKE_COMMAND} -DPLUGIN_BINARY_PATH=${PLUGIN_BINARY_PATH}
+            -P ${CMAKE_CURRENT_BINARY_DIR}/check-plugin-binary.cmake
+  )
+endif()
+
+add_test(
+  NAME scoreboard-core-tests
+  COMMAND scoreboard_core_tests
+)
+
+add_test(
+  NAME scoreboard-core-scoring-tests
+  COMMAND scoreboard_core_scoring_tests
+)
+
+add_test(
+  NAME scoreboard-core-penalties-tests
+  COMMAND scoreboard_core_penalties_tests
+)
+
+add_test(
+  NAME scoreboard-core-persistence-tests
+  COMMAND scoreboard_core_persistence_tests
+)
