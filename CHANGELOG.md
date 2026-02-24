@@ -4,17 +4,31 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-24
+
 ### Added
+- Main config, override config, and environment file fields in Game Settings dialog with Browse buttons
+- Visible process queue in dock (auto-hidden when no jobs, appears on CLI events)
+- Right-click context menu on process queue to clear completed jobs
+- `clear_completed_jobs()` function for queue management
 - Cross-platform build support (macOS, Windows, Linux)
 - GitHub Actions CI: build and test on all 3 platforms with coverage enforcement
 - GitHub Actions release workflow: platform packaging with optional code signing
 - About dialog accessible from dock menu (shows version, license, repo link)
 - Windows and Linux CMake presets (`windows`, `linux`)
+- Qt6 build support with `USE_OBS_QT_FRAMEWORKS` CMake option for macOS local development
 
 ### Changed
-- CMakeLists.txt refactored for cross-platform Qt5/OBS/SIMDE discovery
+- CMakeLists.txt refactored for cross-platform Qt5/Qt6/OBS/SIMDE discovery
+- macOS build now links against OBS.app's bundled Qt6 frameworks when OBS.app is present, avoiding dual-Qt-runtime crash
+- `configure.sh` auto-detects OBS.app and skips Homebrew Qt prefix when present (CI still uses qt@5)
+- `QAction` include is now version-conditional (`QtGui` for Qt6, `QtWidgets` for Qt5)
 - `merge_path_value()` now uses platform-correct PATH separator (`;` on Windows, `:` elsewhere)
 - Compiler flags platform-gated: MSVC uses `/W4`, GCC/Clang uses `-Wall -Wextra -Wpedantic`
+- Game Settings save now reloads CLI config (`load_cli_config()`) after updating paths
+
+### Fixed
+- Fixed shutdown double-free of `g_queue_container` (now owned by QScrollArea widget tree)
 
 ## [0.1.0] - 2026-02-23
 
