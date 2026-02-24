@@ -110,16 +110,28 @@ jobs:
             libwebsocketpp-dev libasio-dev libqrcodegencpp-dev \
             uthash-dev
 
+      - name: Cache OBS build
+        id: obs-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/obs-studio
+            /tmp/obs-build
+          key: obs-linux-30.2.3-qt5-${{ runner.arch }}
+
       - name: Clone OBS source
+        if: steps.obs-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch 30.2.3 \
             https://github.com/obsproject/obs-studio.git /tmp/obs-studio
 
       - name: Build minimal OBS (libobs + frontend API)
+        if: steps.obs-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S /tmp/obs-studio -B /tmp/obs-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DQT_VERSION=5 \
             -DENABLE_PLUGINS=OFF \
             -DENABLE_UI=ON \
             -DENABLE_SCRIPTING=OFF \

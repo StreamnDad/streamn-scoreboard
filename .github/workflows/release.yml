@@ -139,6 +139,7 @@ jobs:
           cmake -S /tmp/obs-studio -B /tmp/obs-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DQT_VERSION=5 \
             -DENABLE_PLUGINS=OFF \
             -DENABLE_UI=ON \
             -DENABLE_SCRIPTING=OFF \
