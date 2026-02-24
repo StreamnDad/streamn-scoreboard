@@ -2,7 +2,7 @@
 #include "plugin-version.h"
 #include "../data/streamn-dad-logo.h"
 
-#include <frontend/api/obs-frontend-api.h>
+#include <obs-frontend-api.h>
 #include <util/config-file.h>
 
 #include <QtCore/QByteArray>

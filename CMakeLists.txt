@@ -71,11 +71,14 @@ if(BUILD_PLUGIN_MODULE)
 
     if(NOT OBS_SOURCE_DIR)
       get_filename_component(_obs_source_guess "${OBS_INCLUDE_DIR}" DIRECTORY)
-      set(OBS_SOURCE_DIR "${_obs_source_guess}" CACHE PATH "Path to OBS source directory (contains frontend/api/obs-frontend-api.h)" FORCE)
+      set(OBS_SOURCE_DIR "${_obs_source_guess}" CACHE PATH "Path to OBS source directory (for frontend API header discovery)" FORCE)
     endif()
 
-    if(EXISTS "${OBS_SOURCE_DIR}/frontend/api/obs-frontend-api.h")
-      list(APPEND _obs_frontend_include_dirs "${OBS_SOURCE_DIR}")
+    # OBS >=30 moved the header to UI/obs-frontend-api/
+    if(EXISTS "${OBS_SOURCE_DIR}/UI/obs-frontend-api/obs-frontend-api.h")
+      list(APPEND _obs_frontend_include_dirs "${OBS_SOURCE_DIR}/UI/obs-frontend-api")
+    elseif(EXISTS "${OBS_SOURCE_DIR}/frontend/api/obs-frontend-api.h")
+      list(APPEND _obs_frontend_include_dirs "${OBS_SOURCE_DIR}/frontend/api")
     endif()
 
     # --- OBS frontend API library discovery (platform-gated) ---
@@ -203,7 +206,7 @@ if(BUILD_PLUGIN_MODULE)
 
   if(NOT _obs_frontend_include_dirs)
     message(FATAL_ERROR
-      "OBS frontend headers not found. Set OBS_SOURCE_DIR so frontend/api/obs-frontend-api.h is available.")
+      "OBS frontend headers not found. Set OBS_SOURCE_DIR so obs-frontend-api.h is discoverable.")
   endif()
 
   add_library(streamn_obs_scoreboard MODULE
