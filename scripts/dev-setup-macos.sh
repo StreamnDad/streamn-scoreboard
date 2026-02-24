@@ -7,7 +7,7 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 echo "Installing base build tools..."
-brew install cmake ninja pkg-config simde
+brew install cmake ninja pkg-config simde qt@5
 
 echo "Checking for OBS Studio..."
 if [ ! -d "/Applications/OBS.app" ]; then

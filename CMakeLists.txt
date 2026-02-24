@@ -167,15 +167,29 @@ if(BUILD_PLUGIN_MODULE)
   if(NOT _qt5_found AND APPLE)
     set(_qt_compat_dir "${CMAKE_CURRENT_BINARY_DIR}/qt-compat")
     file(MAKE_DIRECTORY "${_qt_compat_dir}")
-    foreach(_qt_mod QtCore QtGui QtWidgets)
-      if(EXISTS "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers")
-        execute_process(
-          COMMAND ${CMAKE_COMMAND} -E create_symlink
-            "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers"
-            "${_qt_compat_dir}/${_qt_mod}"
-        )
+    # Prefer qt@5 (Homebrew keg-only), fall back to unversioned qt
+    set(_qt_brew_prefixes
+      "/opt/homebrew/opt/qt@5/lib"
+      "/usr/local/opt/qt@5/lib"
+      "/opt/homebrew/opt/qt/lib"
+      "/usr/local/opt/qt/lib"
+    )
+    set(_qt_header_base "")
+    foreach(_prefix ${_qt_brew_prefixes})
+      if(EXISTS "${_prefix}/QtCore.framework/Headers")
+        set(_qt_header_base "${_prefix}")
+        break()
       endif()
     endforeach()
+    if(_qt_header_base)
+      foreach(_qt_mod QtCore QtGui QtWidgets)
+        execute_process(
+          COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${_qt_header_base}/${_qt_mod}.framework/Headers"
+            "${_qt_compat_dir}/${_qt_mod}"
+        )
+      endforeach()
+    endif()
 
     find_library(_obs_qt_core_library
       NAMES QtCore
@@ -266,7 +280,27 @@ if(BUILD_PLUGIN_MODULE)
   endif()
 
   # --- Link libraries ---
-  if(_qt5_found)
+  # On macOS with Qt5 from find_package, prevent OBS framework paths from
+  # polluting compile-time framework search (which shadows Qt5 headers).
+  # Wrap raw framework libraries in IMPORTED targets that only contribute
+  # link flags, not -F compile flags.
+  if(APPLE AND _qt5_found)
+    add_library(_obs_link UNKNOWN IMPORTED)
+    set_target_properties(_obs_link PROPERTIES IMPORTED_LOCATION "${_obs_libraries}")
+    set_property(TARGET _obs_link PROPERTY IMPORTED_NO_SYSTEM ON)
+    add_library(_obs_frontend_link UNKNOWN IMPORTED)
+    set_target_properties(_obs_frontend_link PROPERTIES IMPORTED_LOCATION "${_obs_frontend_api_library}")
+    set_property(TARGET _obs_frontend_link PROPERTY IMPORTED_NO_SYSTEM ON)
+    target_link_libraries(streamn_obs_scoreboard
+      PRIVATE
+        scoreboard_core
+        _obs_link
+        _obs_frontend_link
+        Qt5::Core
+        Qt5::Gui
+        Qt5::Widgets
+    )
+  elseif(_qt5_found)
     target_link_libraries(streamn_obs_scoreboard
       PRIVATE
         scoreboard_core
