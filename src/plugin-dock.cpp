@@ -1,5 +1,6 @@
 #include "scoreboard-dock.h"
 #include "plugin-version.h"
+#include "../data/streamn-dad-logo.h"
 
 #include <frontend/api/obs-frontend-api.h>
 #include <util/config-file.h>
@@ -19,6 +20,9 @@
 #include <QtGui/QAction>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QPixmap>
+
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QFileDialog>
@@ -46,6 +50,7 @@ const char *kCliExecutableKey = "cli_executable";
 const char *kMainConfigKey = "main_config_path";
 const char *kOverrideConfigKey = "override_config_path";
 const char *kEnvFileKey = "environment_file";
+const char *kAutoHighlightsKey = "auto_highlights";
 
 enum scoreboard_event_type {
 	SB_EVENT_NONE = 0,
@@ -112,8 +117,11 @@ QVector<process_job *> g_jobs;
 int g_next_job_id = 1;
 QHash<int, cli_action_binding> g_cli_actions;
 QString g_environment_file;
+QPushButton *g_highlights_btn = nullptr;
+QProcess *g_highlights_process = nullptr;
+bool g_auto_highlights = false;
 
-obs_hotkey_id g_hotkey_ids[22];
+obs_hotkey_id g_hotkey_ids[23];
 
 void log_info(const QString &message)
 {
@@ -234,14 +242,26 @@ QString merge_path_value(const QString &current_path,
 	QString merged = override_path;
 	merged.replace("$PATH", current_path);
 	merged.replace("${PATH}", current_path);
-	QStringList parts = merged.split(':', Qt::SkipEmptyParts);
+#ifdef _WIN32
+	const QChar sep = ';';
+	QStringList parts = merged.split(sep, Qt::SkipEmptyParts);
+	const QString sys_root =
+		QProcessEnvironment::systemEnvironment().value("SystemRoot",
+							       "C:\\Windows");
+	const QStringList required = {sys_root + "\\system32",
+				      sys_root,
+				      sys_root + "\\System32\\Wbem"};
+#else
+	const QChar sep = ':';
+	QStringList parts = merged.split(sep, Qt::SkipEmptyParts);
 	const QStringList required = {"/usr/bin", "/bin", "/usr/sbin",
 				      "/sbin"};
+#endif
 	for (const QString &entry : required) {
 		if (!parts.contains(entry))
 			parts << entry;
 	}
-	return parts.join(':');
+	return parts.join(sep);
 }
 
 QStringList json_string_list(const QJsonValue &value)
@@ -782,6 +802,7 @@ void load_profile_paths()
 	const char *main_cfg = nullptr;
 	const char *override_cfg = nullptr;
 	const char *env_file = nullptr;
+	const char *auto_hl = nullptr;
 
 	if (profile_cfg != nullptr) {
 		output_dir = config_get_string(profile_cfg, kConfigSection,
@@ -794,6 +815,8 @@ void load_profile_paths()
 						 kOverrideConfigKey);
 		env_file = config_get_string(profile_cfg, kConfigSection,
 					     kEnvFileKey);
+		auto_hl = config_get_string(profile_cfg, kConfigSection,
+					    kAutoHighlightsKey);
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -802,6 +825,9 @@ void load_profile_paths()
 	scoreboard_set_override_config_path(override_cfg);
 	g_environment_file =
 		env_file ? QString::fromUtf8(env_file).trimmed() : QString();
+	g_auto_highlights =
+		auto_hl ? QString::fromUtf8(auto_hl).trimmed() == "true"
+			: false;
 }
 
 void save_profile_paths()
@@ -819,6 +845,8 @@ void save_profile_paths()
 			  scoreboard_get_override_config_path());
 	config_set_string(profile_cfg, kConfigSection, kEnvFileKey,
 			  g_environment_file.toUtf8().constData());
+	config_set_string(profile_cfg, kConfigSection, kAutoHighlightsKey,
+			  g_auto_highlights ? "true" : "false");
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -839,6 +867,84 @@ void load_cli_config()
 		merged_obj =
 			merge_json_values(main_obj, override_obj).toObject();
 	load_cli_actions_from_config(merged_obj);
+}
+
+/* ---- Highlights generation ---- */
+
+void update_highlights_button_visibility()
+{
+	if (!g_highlights_btn)
+		return;
+	const QString cli_path =
+		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
+	g_highlights_btn->setVisible(!cli_path.isEmpty());
+}
+
+void finish_highlights_generation()
+{
+	if (g_highlights_process) {
+		g_highlights_process->deleteLater();
+		g_highlights_process = nullptr;
+	}
+	if (g_highlights_btn) {
+		g_highlights_btn->setText("Generate Period Highlights");
+		g_highlights_btn->setStyleSheet("");
+		g_highlights_btn->setEnabled(true);
+	}
+}
+
+void start_highlights_generation()
+{
+	const QString executable =
+		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
+	if (executable.isEmpty())
+		return;
+	if (g_highlights_process)
+		return;
+
+	g_highlights_process = new QProcess(g_dock_widget);
+	g_highlights_process->setProgram(executable);
+	g_highlights_process->setArguments({"publish", "highlights"});
+
+	QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+	const QString env_file_path = expand_user_path(g_environment_file);
+	if (!env_file_path.trimmed().isEmpty()) {
+		const QMap<QString, QString> overrides =
+			parse_env_file(env_file_path);
+		for (auto it = overrides.begin(); it != overrides.end(); ++it) {
+			if (it.key() == "PATH") {
+				env.insert("PATH",
+					   merge_path_value(env.value("PATH"),
+							    it.value()));
+			} else {
+				env.insert(it.key(), it.value());
+			}
+		}
+	}
+	g_highlights_process->setProcessEnvironment(env);
+
+	QObject::connect(
+		g_highlights_process, &QProcess::errorOccurred,
+		[](QProcess::ProcessError) { finish_highlights_generation(); });
+	QObject::connect(
+		g_highlights_process,
+		qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+		[](int, QProcess::ExitStatus) {
+			finish_highlights_generation();
+		});
+
+	if (g_highlights_btn) {
+		g_highlights_btn->setText("Generating...");
+		g_highlights_btn->setEnabled(false);
+		QPalette p = g_highlights_btn->palette();
+		QColor base = p.color(QPalette::Button);
+		QColor red = QColor::fromHslF(0.0, 0.7, base.lightnessF());
+		g_highlights_btn->setStyleSheet(
+			"color: " + red.name() + "; font-weight: bold;");
+	}
+
+	g_highlights_process->start();
+	log_info("[streamn-obs-scoreboard] highlights generation started");
 }
 
 /* ---- Dialogs ---- */
@@ -982,6 +1088,40 @@ void open_clock_settings_dialog(QWidget *parent)
 	pen_dur_row->addWidget(pen_dur_spin);
 	layout->addLayout(pen_dur_row);
 
+	QFrame *sep = new QFrame(&dialog);
+	sep->setFrameShape(QFrame::HLine);
+	sep->setFrameShadow(QFrame::Sunken);
+	layout->addWidget(sep);
+
+	QHBoxLayout *cli_row = new QHBoxLayout();
+	cli_row->addWidget(new QLabel("Streamn CLI path:", &dialog));
+	QLineEdit *cli_input = new QLineEdit(&dialog);
+	cli_input->setText(
+		QString::fromUtf8(scoreboard_get_cli_executable()));
+	cli_input->setPlaceholderText("/path/to/streamn-cli");
+	QPushButton *cli_browse = new QPushButton("Browse", &dialog);
+	cli_row->addWidget(cli_input, 1);
+	cli_row->addWidget(cli_browse);
+	layout->addLayout(cli_row);
+
+	QObject::connect(cli_browse, &QPushButton::clicked,
+			 [&dialog, cli_input]() {
+				 const QString path =
+					 QFileDialog::getOpenFileName(
+						 &dialog,
+						 "Select Streamn CLI",
+						 cli_input->text());
+				 if (!path.isEmpty())
+					 cli_input->setText(path);
+			 });
+
+	QCheckBox *auto_hl_check =
+		new QCheckBox("Auto-generate period highlights on period "
+			      "change",
+			      &dialog);
+	auto_hl_check->setChecked(g_auto_highlights);
+	layout->addWidget(auto_hl_check);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -997,9 +1137,79 @@ void open_clock_settings_dialog(QWidget *parent)
 					      : SCOREBOARD_CLOCK_COUNT_UP);
 		scoreboard_set_default_penalty_duration(
 			pen_dur_spin->value());
+		scoreboard_set_cli_executable(
+			cli_input->text().trimmed().toUtf8().constData());
+		g_auto_highlights = auto_hl_check->isChecked();
+		save_profile_paths();
 		scoreboard_clock_reset();
 		update_all_labels();
+		update_highlights_button_visibility();
 	}
+}
+
+void open_about_dialog(QWidget *parent)
+{
+	QDialog dialog(parent);
+	dialog.setWindowTitle("About Streamn Scoreboard");
+	dialog.setFixedWidth(360);
+	QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+	QLabel *title_label = new QLabel(
+		"<b>Streamn Scoreboard</b> v" PLUGIN_VERSION, &dialog);
+	title_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(title_label);
+
+	QLabel *desc_label = new QLabel(
+		"OBS Studio plugin for tracking youth hockey scoreboard state. "
+		"Writes game data to text files for use with OBS Text sources.",
+		&dialog);
+	desc_label->setWordWrap(true);
+	desc_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(desc_label);
+
+	layout->addSpacing(8);
+
+	QLabel *license_label = new QLabel(
+		"License: <a href=\"https://www.gnu.org/licenses/old-licenses/gpl-2.0.html\">GNU GPL v2</a>",
+		&dialog);
+	license_label->setOpenExternalLinks(true);
+	license_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(license_label);
+
+	QLabel *repo_label = new QLabel(
+		"<a href=\"https://github.com/StreamnDad/streamn-scoreboard\">github.com/StreamnDad/streamn-scoreboard</a>",
+		&dialog);
+	repo_label->setOpenExternalLinks(true);
+	repo_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(repo_label);
+
+	layout->addSpacing(12);
+
+	QLabel *logo_label = new QLabel(&dialog);
+	QPixmap logo;
+	logo.loadFromData(data_streamn_dad_logo_jpg,
+			  data_streamn_dad_logo_jpg_len, "JPEG");
+	logo_label->setPixmap(logo.scaled(48, 48, Qt::KeepAspectRatio,
+					   Qt::SmoothTransformation));
+	logo_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(logo_label);
+
+	QLabel *brought_label = new QLabel(
+		"Brought to you by <a href=\"https://streamn.dad\">StreaMN Dad</a>",
+		&dialog);
+	brought_label->setOpenExternalLinks(true);
+	brought_label->setAlignment(Qt::AlignCenter);
+	layout->addWidget(brought_label);
+
+	layout->addSpacing(8);
+
+	QDialogButtonBox *buttons =
+		new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+	QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+			 &QDialog::reject);
+	layout->addWidget(buttons);
+
+	dialog.exec();
 }
 
 /* ---- Hotkeys ---- */
@@ -1103,6 +1313,8 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 		return;
 	scoreboard_period_advance();
 	fire_cli_event(SB_EVENT_PERIOD_CHANGE);
+	if (g_auto_highlights)
+		start_highlights_generation();
 }
 
 void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1149,6 +1361,13 @@ void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (pressed)
 		scoreboard_away_penalty_clear(1);
+}
+
+void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
+			     bool pressed)
+{
+	if (pressed)
+		start_highlights_generation();
 }
 
 void register_hotkeys()
@@ -1220,15 +1439,10 @@ void register_hotkeys()
 	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
 		"sb_away_pen_clear2", "Streamn: Away Penalty Clear 2",
 		hk_away_pen_clear2, nullptr);
-}
-
-void unregister_hotkeys()
-{
-	for (int i = 0; i < 24; i++) {
-		if (g_hotkey_ids[i] != OBS_INVALID_HOTKEY_ID)
-			obs_hotkey_unregister(g_hotkey_ids[i]);
-		g_hotkey_ids[i] = OBS_INVALID_HOTKEY_ID;
-	}
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_generate_highlights",
+		"Streamn: Generate Period Highlights",
+		hk_generate_highlights, nullptr);
 }
 
 void on_frontend_event(enum obs_frontend_event event, void *private_data)
@@ -1239,6 +1453,7 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		load_profile_paths();
 		load_cli_config();
 		update_all_labels();
+		update_highlights_button_visibility();
 	}
 }
 } // namespace
@@ -1278,6 +1493,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QAction *clock_settings_action = menu->addAction("Game Settings...");
 	QAction *new_game_action = menu->addAction("New Game");
 	QAction *refresh_action = menu->addAction("Refresh State...");
+	menu->addSeparator();
+	QAction *about_action = menu->addAction("About...");
 
 	menu_button->setText(QString::fromUtf8("\xe2\x8b\xae"));
 	menu_button->setPopupMode(QToolButton::InstantPopup);
@@ -1517,6 +1734,13 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 
 	root->addLayout(pen_section);
 
+	add_separator();
+
+	/* Highlights generation button */
+	g_highlights_btn = new QPushButton("Generate Period Highlights", widget);
+	g_highlights_btn->setVisible(false);
+	root->addWidget(g_highlights_btn);
+
 	/* Hidden process queue (used by CLI integration, not shown in dock) */
 	g_queue_container = new QWidget();
 	g_queue_layout = new QVBoxLayout(g_queue_container);
@@ -1559,6 +1783,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(period_adv_btn, &QPushButton::clicked, []() {
 		scoreboard_period_advance();
+		if (g_auto_highlights)
+			start_highlights_generation();
 		update_all_labels();
 	});
 	QObject::connect(period_rew_btn, &QPushButton::clicked, []() {
@@ -1615,6 +1841,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(away_pen_add, &QPushButton::clicked, [widget]() {
 		open_add_penalty_dialog(widget, false);
 	});
+	QObject::connect(g_highlights_btn, &QPushButton::clicked,
+			 []() { start_highlights_generation(); });
 	/* Penalty clear buttons are connected dynamically in update_all_labels */
 
 	/* Menu actions */
@@ -1631,6 +1859,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		scoreboard_read_all_files();
 		update_all_labels();
 	});
+	QObject::connect(about_action, &QAction::triggered,
+			 [widget]() { open_about_dialog(widget); });
 
 	/* Timer */
 	g_tick_timer = new QTimer(widget);
@@ -1655,13 +1885,16 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
 	load_cli_config();
 	update_all_labels();
+	update_highlights_button_visibility();
 	log_info("[streamn-obs-scoreboard] dock initialized");
 	return true;
 }
 
 void scoreboard_dock_shutdown(void)
 {
-	unregister_hotkeys();
+	/* Do NOT call unregister_hotkeys() here — OBS saves hotkey bindings
+	   during shutdown and cleans up hotkeys after module unload.
+	   Unregistering early destroys bindings before OBS persists them. */
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 	obs_frontend_remove_dock(kDockId);
 
@@ -1669,6 +1902,13 @@ void scoreboard_dock_shutdown(void)
 		g_tick_timer->stop();
 		g_tick_timer = nullptr;
 	}
+
+	if (g_highlights_process) {
+		g_highlights_process->kill();
+		g_highlights_process->deleteLater();
+		g_highlights_process = nullptr;
+	}
+	g_highlights_btn = nullptr;
 
 	for (process_job *job : g_jobs) {
 		if (!job)

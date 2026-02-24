@@ -1,5 +1,6 @@
 # Streamn Scoreboard for OBS Studio
 
+[![Build](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml/badge.svg)](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
 OBS Studio plugin that tracks youth hockey scoreboard state and writes it to individual text files. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
@@ -15,31 +16,43 @@ OBS Studio plugin that tracks youth hockey scoreboard state and writes it to ind
 
 - **OBS Studio** 30.0+ (uses Qt5 dock API)
 - **macOS** (Apple Silicon and Intel)
+- **Windows** (x64)
+- **Linux** (x86_64)
 - C11 / C++17
 
 ## Installation
 
-### From `.pkg` installer (recommended)
+### macOS
 
-Download the latest `.pkg` from [Releases](../../releases), run it, and restart OBS. The plugin installs to `~/Library/Application Support/obs-studio/plugins/`.
+Download the latest `.pkg` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases), run it, and restart OBS. The plugin installs to `~/Library/Application Support/obs-studio/plugins/`.
+
+### Windows
+
+Download the latest `.zip` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases). Extract and copy `obs-plugins/64bit/streamn-obs-scoreboard.dll` to your OBS plugins folder (typically `C:\Program Files\obs-studio\obs-plugins\64bit\`). Restart OBS.
+
+### Linux
+
+Download the latest `.tar.gz` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases). Extract and copy `obs-plugins/streamn-obs-scoreboard.so` to `~/.config/obs-studio/plugins/streamn-obs-scoreboard/bin/64bit/` or `/usr/lib/obs-plugins/`. Restart OBS.
 
 ### From source
 
 ```bash
-# Install prerequisites (requires Homebrew)
-make setup
-
-# Find OBS development paths on your system
-make find-obs-dev-paths
-
-# Build and test (use paths from find-obs-dev-paths output)
+# macOS
+make setup                    # Install prerequisites (requires Homebrew)
+make find-obs-dev-paths       # Find OBS development paths
 make dev OBS_INCLUDE_DIR=/path/to/obs/include OBS_LIBRARY=/path/to/libobs
-
-# Install to OBS plugin directory
 make install
 
-# Launch OBS
-make run
+# Linux
+sudo apt install libobs-dev qtbase5-dev libsimde-dev ninja-build
+cmake --preset linux
+cmake --build build
+ctest --test-dir build
+
+# Windows (requires Visual Studio 2022, Qt5, OBS SDK)
+cmake --preset windows -DOBS_INCLUDE_DIR=... -DOBS_LIBRARY=... -DCMAKE_PREFIX_PATH=...
+cmake --build build --config RelWithDebInfo
+ctest --test-dir build -C RelWithDebInfo
 ```
 
 ## Text Files

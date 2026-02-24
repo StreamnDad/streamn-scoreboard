@@ -1,0 +1,239 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Package (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake simde
+
+      - name: Clone OBS source (headers only)
+        run: |
+          git clone --depth 1 --branch 30.2.3 \
+            https://github.com/obsproject/obs-studio.git /tmp/obs-studio
+
+      - name: Locate OBS.app frameworks
+        id: obs-paths
+        run: |
+          OBS_APP="/Applications/OBS.app"
+          if [ ! -d "$OBS_APP" ]; then
+            curl -L -o /tmp/obs.dmg \
+              "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.2.3-macOS-Apple.dmg"
+            hdiutil attach /tmp/obs.dmg -nobrowse -mountpoint /tmp/obs-mount
+            cp -R /tmp/obs-mount/OBS.app /tmp/OBS.app
+            hdiutil detach /tmp/obs-mount
+            OBS_APP="/tmp/OBS.app"
+          fi
+          echo "obs_app=${OBS_APP}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        run: |
+          cmake --preset default \
+            -DOBS_INCLUDE_DIR=/tmp/obs-studio/libobs \
+            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.obs_app }}/Contents/Frameworks/libobs.framework/libobs" \
+            -DOBS_SOURCE_DIR=/tmp/obs-studio
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Code sign (optional)
+        if: env.MACOS_SIGNING_CERT != ''
+        env:
+          MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
+          MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          echo "$MACOS_SIGNING_CERT" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/cert.p12 -k build.keychain \
+            -P "$MACOS_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "" build.keychain
+          codesign --force --sign "$MACOS_SIGNING_IDENTITY" \
+            --options runtime build/streamn-obs-scoreboard.so
+
+      - name: Package .pkg
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGING="/tmp/pkg-root/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard/bin"
+          mkdir -p "$STAGING"
+          cp build/streamn-obs-scoreboard.so "$STAGING/"
+          pkgbuild \
+            --root /tmp/pkg-root \
+            --identifier com.streamndad.streamn-obs-scoreboard \
+            --version "$VERSION" \
+            --install-location / \
+            "streamn-obs-scoreboard-${VERSION}-macos.pkg"
+
+      - name: Notarize (optional)
+        if: env.MACOS_NOTARIZE_APPLE_ID != ''
+        env:
+          MACOS_NOTARIZE_APPLE_ID: ${{ secrets.MACOS_NOTARIZE_APPLE_ID }}
+          MACOS_NOTARIZE_PASSWORD: ${{ secrets.MACOS_NOTARIZE_PASSWORD }}
+          MACOS_NOTARIZE_TEAM_ID: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          xcrun notarytool submit \
+            "streamn-obs-scoreboard-${VERSION}-macos.pkg" \
+            --apple-id "$MACOS_NOTARIZE_APPLE_ID" \
+            --password "$MACOS_NOTARIZE_PASSWORD" \
+            --team-id "$MACOS_NOTARIZE_TEAM_ID" \
+            --wait
+          xcrun stapler staple \
+            "streamn-obs-scoreboard-${VERSION}-macos.pkg"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: streamn-obs-scoreboard-*-macos.pkg
+
+  build-linux:
+    name: Package (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build libobs-dev qtbase5-dev libsimde-dev \
+            obs-studio
+
+      - name: Configure
+        run: cmake --preset linux
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package .tar.gz
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGING="/tmp/tar-root/obs-plugins"
+          mkdir -p "$STAGING"
+          cp build/streamn-obs-scoreboard.so "$STAGING/"
+          tar -czf "streamn-obs-scoreboard-${VERSION}-linux-x86_64.tar.gz" \
+            -C /tmp/tar-root obs-plugins
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: streamn-obs-scoreboard-*-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Package (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download OBS SDK
+        run: |
+          curl -L -o obs-sdk.zip `
+            "https://github.com/obsproject/obs-studio/releases/download/30.2.3/OBS-Studio-30.2.3-Windows.zip"
+          Expand-Archive obs-sdk.zip -DestinationPath obs-sdk
+
+      - name: Clone OBS source (headers only)
+        run: |
+          git clone --depth 1 --branch 30.2.3 `
+            https://github.com/obsproject/obs-studio.git obs-source
+
+      - name: Install Qt5
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: 'win64_msvc2019_64'
+
+      - name: Find OBS paths
+        id: obs-paths
+        shell: pwsh
+        run: |
+          $obsLib = Get-ChildItem -Recurse -Filter "obs.lib" -Path obs-sdk | Select-Object -First 1
+          $frontendLib = Get-ChildItem -Recurse -Filter "obs-frontend-api.lib" -Path obs-sdk | Select-Object -First 1
+          echo "obs_library=$($obsLib.FullName)" >> $env:GITHUB_OUTPUT
+          echo "obs_frontend_library=$($frontendLib.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        run: |
+          cmake --preset windows `
+            -DOBS_INCLUDE_DIR="obs-source/libobs" `
+            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.obs_library }}" `
+            -DOBS_SOURCE_DIR="obs-source" `
+            -DOBS_FRONTEND_API_LIBRARY="${{ steps.obs-paths.outputs.obs_frontend_library }}"
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo
+
+      - name: Test
+        run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
+
+      - name: Code sign (optional)
+        if: env.WINDOWS_SIGNING_CERT != ''
+        env:
+          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("cert.pfx",
+            [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT))
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" `
+            sign /f cert.pfx /p $env:WINDOWS_SIGNING_CERT_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 `
+            build/RelWithDebInfo/streamn-obs-scoreboard.dll
+          Remove-Item cert.pfx
+
+      - name: Package .zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $staging = "pkg-root/obs-plugins/64bit"
+          New-Item -ItemType Directory -Force -Path $staging
+          Copy-Item "build/RelWithDebInfo/streamn-obs-scoreboard.dll" $staging
+          Compress-Archive -Path "pkg-root/obs-plugins" `
+            -DestinationPath "streamn-obs-scoreboard-${version}-windows-x64.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: streamn-obs-scoreboard-*-windows-x64.zip
+
+  create-release:
+    name: Create Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/*

@@ -10,8 +10,16 @@ compile_commands.json
 # macOS
 .DS_Store
 
+# Windows build artifacts
+*.obj
+*.pdb
+*.exp
+*.ilk
+
 # IDE
 .vscode/*.log
+.vs/
+*.user
 
 # AI development docs (keep locally, exclude from public repo)
 CLAUDE.md

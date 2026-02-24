@@ -21,8 +21,22 @@ set(_obs_ldflags_other "")
 set(_extra_include_dirs "")
 set(_obs_frontend_include_dirs "")
 set(_obs_frontend_api_library "")
+set(_qt5_found OFF)
 
 if(BUILD_PLUGIN_MODULE)
+  # --- Qt5 discovery: find_package first, macOS framework fallback ---
+  find_package(Qt5 COMPONENTS Core Gui Widgets QUIET)
+  if(Qt5_FOUND)
+    set(_qt5_found ON)
+  elseif(APPLE)
+    # macOS fallback: search OBS.app bundled Qt frameworks
+  else()
+    message(FATAL_ERROR
+      "Qt5 was not found. Set CMAKE_PREFIX_PATH to your Qt5 installation "
+      "(e.g. -DCMAKE_PREFIX_PATH=/path/to/Qt/5.15.2/gcc_64).")
+  endif()
+
+  # --- OBS SDK discovery ---
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
     pkg_check_modules(LIBOBS QUIET libobs)
@@ -59,35 +73,64 @@ if(BUILD_PLUGIN_MODULE)
       list(APPEND _obs_frontend_include_dirs "${OBS_SOURCE_DIR}")
     endif()
 
+    # --- OBS frontend API library discovery (platform-gated) ---
     if(OBS_FRONTEND_API_LIBRARY)
       set(_obs_frontend_api_library "${OBS_FRONTEND_API_LIBRARY}")
-    elseif(EXISTS "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
-      set(_obs_frontend_api_library "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
-    else()
+    elseif(APPLE)
+      if(EXISTS "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
+        set(_obs_frontend_api_library "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
+      else()
+        find_library(_obs_frontend_api_library
+          NAMES obs-frontend-api obs-frontend-api.dylib
+          PATHS
+            /Applications/OBS.app/Contents/Frameworks
+            /opt/homebrew/lib
+            /usr/local/lib
+        )
+      endif()
+    elseif(WIN32)
       find_library(_obs_frontend_api_library
-        NAMES obs-frontend-api obs-frontend-api.dylib
+        NAMES obs-frontend-api
         PATHS
-          /Applications/OBS.app/Contents/Frameworks
-          /opt/homebrew/lib
-          /usr/local/lib
+          "${OBS_INCLUDE_DIR}/../../bin/64bit"
+          "${OBS_INCLUDE_DIR}/../bin/64bit"
       )
+    else()
+      if(PkgConfig_FOUND)
+        pkg_check_modules(OBS_FRONTEND QUIET obs-frontend-api)
+      endif()
+      if(OBS_FRONTEND_FOUND)
+        set(_obs_frontend_api_library ${OBS_FRONTEND_LIBRARIES})
+        list(APPEND _obs_frontend_include_dirs ${OBS_FRONTEND_INCLUDE_DIRS})
+        list(APPEND _obs_library_dirs ${OBS_FRONTEND_LIBRARY_DIRS})
+      else()
+        find_library(_obs_frontend_api_library
+          NAMES obs-frontend-api
+          PATHS /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/local/lib
+        )
+      endif()
     endif()
 
+    # --- SIMDE discovery (platform-gated) ---
     if(NOT SIMDE_INCLUDE_DIR)
       unset(SIMDE_INCLUDE_DIR CACHE)
-      find_path(SIMDE_INCLUDE_DIR simde/x86/sse2.h
-        PATHS
-          /opt/homebrew/include
-          /usr/local/include
-      )
+      if(APPLE)
+        find_path(SIMDE_INCLUDE_DIR simde/x86/sse2.h
+          PATHS /opt/homebrew/include /usr/local/include
+        )
+      elseif(UNIX)
+        find_path(SIMDE_INCLUDE_DIR simde/x86/sse2.h
+          PATHS /usr/include /usr/local/include
+        )
+      endif()
     endif()
 
     if(SIMDE_INCLUDE_DIR)
       list(APPEND _extra_include_dirs ${SIMDE_INCLUDE_DIR})
-    else()
+    elseif(NOT WIN32)
       message(WARNING
-        "simde headers were not found. Install simde (e.g. 'brew install simde') "
-        "or set -DSIMDE_INCLUDE_DIR=/path/to/include.")
+        "simde headers were not found. Install simde (e.g. 'brew install simde' / "
+        "'apt install libsimde-dev') or set -DSIMDE_INCLUDE_DIR=/path/to/include.")
     endif()
   endif()
 endif()
@@ -101,7 +144,7 @@ target_include_directories(scoreboard_core
     include
 )
 
-if(ENABLE_COVERAGE)
+if(ENABLE_COVERAGE AND NOT MSVC)
   target_compile_options(scoreboard_core PRIVATE -O0 -g --coverage)
   target_link_options(scoreboard_core PRIVATE --coverage)
 endif()
@@ -112,17 +155,41 @@ configure_file(
 )
 
 if(BUILD_PLUGIN_MODULE)
-  set(_qt_compat_dir "${CMAKE_CURRENT_BINARY_DIR}/qt-compat")
-  file(MAKE_DIRECTORY "${_qt_compat_dir}")
-  foreach(_qt_mod QtCore QtGui QtWidgets)
-    if(EXISTS "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers")
-      execute_process(
-        COMMAND ${CMAKE_COMMAND} -E create_symlink
-          "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers"
-          "${_qt_compat_dir}/${_qt_mod}"
-      )
+  # --- Qt5 macOS framework fallback (compat symlinks + find_library) ---
+  if(NOT _qt5_found AND APPLE)
+    set(_qt_compat_dir "${CMAKE_CURRENT_BINARY_DIR}/qt-compat")
+    file(MAKE_DIRECTORY "${_qt_compat_dir}")
+    foreach(_qt_mod QtCore QtGui QtWidgets)
+      if(EXISTS "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers")
+        execute_process(
+          COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "/opt/homebrew/opt/qt/lib/${_qt_mod}.framework/Headers"
+            "${_qt_compat_dir}/${_qt_mod}"
+        )
+      endif()
+    endforeach()
+
+    find_library(_obs_qt_core_library
+      NAMES QtCore
+      PATHS /Applications/OBS.app/Contents/Frameworks
+      NO_DEFAULT_PATH
+    )
+    find_library(_obs_qt_gui_library
+      NAMES QtGui
+      PATHS /Applications/OBS.app/Contents/Frameworks
+      NO_DEFAULT_PATH
+    )
+    find_library(_obs_qt_widgets_library
+      NAMES QtWidgets
+      PATHS /Applications/OBS.app/Contents/Frameworks
+      NO_DEFAULT_PATH
+    )
+
+    if(NOT _obs_qt_core_library OR NOT _obs_qt_gui_library OR NOT _obs_qt_widgets_library)
+      message(FATAL_ERROR
+        "OBS Qt frameworks not found under /Applications/OBS.app/Contents/Frameworks.")
     endif()
-  endforeach()
+  endif()
 
   if(NOT _obs_frontend_api_library)
     message(FATAL_ERROR
@@ -134,38 +201,26 @@ if(BUILD_PLUGIN_MODULE)
       "OBS frontend headers not found. Set OBS_SOURCE_DIR so frontend/api/obs-frontend-api.h is available.")
   endif()
 
-  find_library(_obs_qt_core_library
-    NAMES QtCore
-    PATHS /Applications/OBS.app/Contents/Frameworks
-    NO_DEFAULT_PATH
-  )
-  find_library(_obs_qt_gui_library
-    NAMES QtGui
-    PATHS /Applications/OBS.app/Contents/Frameworks
-    NO_DEFAULT_PATH
-  )
-  find_library(_obs_qt_widgets_library
-    NAMES QtWidgets
-    PATHS /Applications/OBS.app/Contents/Frameworks
-    NO_DEFAULT_PATH
-  )
-
-  if(NOT _obs_qt_core_library OR NOT _obs_qt_gui_library OR NOT _obs_qt_widgets_library)
-    message(FATAL_ERROR
-      "OBS Qt frameworks not found under /Applications/OBS.app/Contents/Frameworks.")
-  endif()
-
   add_library(streamn_obs_scoreboard MODULE
     src/plugin-main.c
     src/plugin-dock.cpp
   )
 
-  target_include_directories(streamn_obs_scoreboard
-    PRIVATE
-      include
-      ${_qt_compat_dir}
-      ${CMAKE_CURRENT_BINARY_DIR}
-  )
+  # --- Include directories ---
+  if(_qt5_found)
+    target_include_directories(streamn_obs_scoreboard
+      PRIVATE
+        include
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+  else()
+    target_include_directories(streamn_obs_scoreboard
+      PRIVATE
+        include
+        ${_qt_compat_dir}
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+  endif()
 
   target_include_directories(streamn_obs_scoreboard
     SYSTEM PRIVATE
@@ -179,28 +234,51 @@ if(BUILD_PLUGIN_MODULE)
       ${_obs_library_dirs}
   )
 
-  target_compile_options(streamn_obs_scoreboard
-    PRIVATE
-      -F/Applications/OBS.app/Contents/Frameworks
-      -F/opt/homebrew/opt/qt/lib
-      -Wall
-      -Wextra
-      -Wpedantic
-  )
-
-  if(ENABLE_WERROR)
-    target_compile_options(streamn_obs_scoreboard PRIVATE -Werror)
+  # --- Compiler flags (platform-gated) ---
+  if(MSVC)
+    target_compile_options(streamn_obs_scoreboard PRIVATE /W4)
+  else()
+    target_compile_options(streamn_obs_scoreboard PRIVATE
+      -Wall -Wextra -Wpedantic
+    )
+    if(APPLE AND NOT _qt5_found)
+      target_compile_options(streamn_obs_scoreboard PRIVATE
+        -F/Applications/OBS.app/Contents/Frameworks
+        -F/opt/homebrew/opt/qt/lib
+      )
+    endif()
   endif()
 
-  target_link_libraries(streamn_obs_scoreboard
-    PRIVATE
-      scoreboard_core
-      ${_obs_libraries}
-      ${_obs_frontend_api_library}
-      ${_obs_qt_core_library}
-      ${_obs_qt_gui_library}
-      ${_obs_qt_widgets_library}
-  )
+  if(ENABLE_WERROR)
+    if(MSVC)
+      target_compile_options(streamn_obs_scoreboard PRIVATE /WX)
+    else()
+      target_compile_options(streamn_obs_scoreboard PRIVATE -Werror)
+    endif()
+  endif()
+
+  # --- Link libraries ---
+  if(_qt5_found)
+    target_link_libraries(streamn_obs_scoreboard
+      PRIVATE
+        scoreboard_core
+        ${_obs_libraries}
+        ${_obs_frontend_api_library}
+        Qt5::Core
+        Qt5::Gui
+        Qt5::Widgets
+    )
+  else()
+    target_link_libraries(streamn_obs_scoreboard
+      PRIVATE
+        scoreboard_core
+        ${_obs_libraries}
+        ${_obs_frontend_api_library}
+        ${_obs_qt_core_library}
+        ${_obs_qt_gui_library}
+        ${_obs_qt_widgets_library}
+    )
+  endif()
 
   target_compile_definitions(streamn_obs_scoreboard
     PRIVATE
@@ -240,7 +318,7 @@ function(add_core_test test_target test_source)
       scoreboard_core
   )
 
-  if(ENABLE_COVERAGE)
+  if(ENABLE_COVERAGE AND NOT MSVC)
     target_compile_options(${test_target} PRIVATE -O0 -g --coverage)
     target_link_options(${test_target} PRIVATE --coverage)
   endif()

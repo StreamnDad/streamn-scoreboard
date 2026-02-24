@@ -1,0 +1,190 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            preset: linux
+          - os: macos-14
+            preset: default
+          - os: windows-latest
+            preset: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure (core-only)
+        run: cmake --preset ${{ matrix.preset }} -DBUILD_PLUGIN_MODULE=OFF
+
+      - name: Build
+        run: cmake --build build ${{ runner.os == 'Windows' && '--config RelWithDebInfo' || '' }}
+
+      - name: Test
+        run: ctest --test-dir build ${{ runner.os == 'Windows' && '-C RelWithDebInfo' || '' }} --output-on-failure
+
+  build-macos:
+    name: Build (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake simde
+
+      - name: Clone OBS source (headers only)
+        run: |
+          git clone --depth 1 --branch 30.2.3 \
+            https://github.com/obsproject/obs-studio.git /tmp/obs-studio
+
+      - name: Locate OBS.app frameworks
+        id: obs-paths
+        run: |
+          OBS_APP="/Applications/OBS.app"
+          if [ ! -d "$OBS_APP" ]; then
+            echo "OBS.app not found — downloading release DMG"
+            curl -L -o /tmp/obs.dmg \
+              "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.2.3-macOS-Apple.dmg"
+            hdiutil attach /tmp/obs.dmg -nobrowse -mountpoint /tmp/obs-mount
+            cp -R /tmp/obs-mount/OBS.app /tmp/OBS.app
+            hdiutil detach /tmp/obs-mount
+            OBS_APP="/tmp/OBS.app"
+          fi
+          echo "obs_app=${OBS_APP}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        run: |
+          cmake --preset default \
+            -DOBS_INCLUDE_DIR=/tmp/obs-studio/libobs \
+            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.obs_app }}/Contents/Frameworks/libobs.framework/libobs" \
+            -DOBS_SOURCE_DIR=/tmp/obs-studio
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-macos
+          path: build/streamn-obs-scoreboard.so
+
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build libobs-dev qtbase5-dev libsimde-dev \
+            obs-studio
+
+      - name: Configure
+        run: cmake --preset linux
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-linux
+          path: build/streamn-obs-scoreboard.so
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download OBS SDK
+        run: |
+          curl -L -o obs-sdk.zip `
+            "https://github.com/obsproject/obs-studio/releases/download/30.2.3/OBS-Studio-30.2.3-Windows.zip"
+          Expand-Archive obs-sdk.zip -DestinationPath obs-sdk
+
+      - name: Clone OBS source (headers only)
+        run: |
+          git clone --depth 1 --branch 30.2.3 `
+            https://github.com/obsproject/obs-studio.git obs-source
+
+      - name: Install Qt5
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: 'win64_msvc2019_64'
+
+      - name: Find OBS paths
+        id: obs-paths
+        shell: pwsh
+        run: |
+          $obsLib = Get-ChildItem -Recurse -Filter "obs.lib" -Path obs-sdk | Select-Object -First 1
+          $frontendLib = Get-ChildItem -Recurse -Filter "obs-frontend-api.lib" -Path obs-sdk | Select-Object -First 1
+          $obsInclude = "obs-source/libobs"
+          $obsSource = "obs-source"
+          echo "obs_library=$($obsLib.FullName)" >> $env:GITHUB_OUTPUT
+          echo "obs_frontend_library=$($frontendLib.FullName)" >> $env:GITHUB_OUTPUT
+          echo "obs_include=$obsInclude" >> $env:GITHUB_OUTPUT
+          echo "obs_source=$obsSource" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        run: |
+          cmake --preset windows `
+            -DOBS_INCLUDE_DIR="${{ steps.obs-paths.outputs.obs_include }}" `
+            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.obs_library }}" `
+            -DOBS_SOURCE_DIR="${{ steps.obs-paths.outputs.obs_source }}" `
+            -DOBS_FRONTEND_API_LIBRARY="${{ steps.obs-paths.outputs.obs_frontend_library }}"
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo
+
+      - name: Test
+        run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-windows
+          path: build/RelWithDebInfo/streamn-obs-scoreboard.dll
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build gcovr
+
+      - name: Configure
+        run: cmake --preset coverage
+
+      - name: Build
+        run: cmake --build build-coverage
+
+      - name: Test
+        run: ctest --test-dir build-coverage --output-on-failure
+
+      - name: Enforce 100% line coverage
+        run: ./scripts/coverage.sh build-coverage
