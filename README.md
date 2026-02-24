@@ -6,12 +6,20 @@
 
 OBS Studio plugin that tracks youth hockey scoreboard state and writes it to individual text files. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
 
+<p align="center">
+  <img src="images/streamn-scoreboard.png" alt="Streamn Scoreboard dock UI" width="360">
+</p>
+
 ## Features
 
 - **12 text files** updated in real-time: clock, period, scores, shots, team names, penalties
 - **Dock UI** with full scoreboard controls in an OBS dock panel
 - **22 OBS hotkeys** for hands-free operation during broadcasts
 - **Penalty tracking** with automatic countdown timers (2 slots per team)
+
+Build your own scorebug overlay using OBS Text sources pointed at the output files:
+
+![Example scorebug overlay](images/scorebug.png)
 
 ## Compatibility
 
