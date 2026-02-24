@@ -1,6 +1,7 @@
 # Streamn Scoreboard for OBS Studio
 
 [![Build](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml/badge.svg)](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
 OBS Studio plugin that tracks youth hockey scoreboard state and writes it to individual text files. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
