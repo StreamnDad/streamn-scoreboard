@@ -117,6 +117,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             ninja-build qtbase5-dev libsimde-dev \
+            qt6-base-dev \
             libjansson-dev libcurl4-openssl-dev libx264-dev \
             libwayland-dev libxkbcommon-dev libpipewire-0.3-dev \
             libpulse-dev libx11-xcb-dev libxcb-randr0-dev \
@@ -139,7 +140,6 @@ jobs:
           cmake -S /tmp/obs-studio -B /tmp/obs-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DQT_VERSION=5 \
             -DENABLE_PLUGINS=OFF \
             -DENABLE_UI=ON \
             -DENABLE_SCRIPTING=OFF \
