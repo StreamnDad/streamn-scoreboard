@@ -5,14 +5,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#define mkdir(path, mode) _mkdir(path)
+#define getpid() _getpid()
+#else
 #include <unistd.h>
+#endif
 
 static char g_tmp_dir[256];
 
 static void setup_tmp_dir(void)
 {
+#ifdef _WIN32
+	snprintf(g_tmp_dir, sizeof(g_tmp_dir), "%s\\scoreboard_test_%d",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid());
+#else
 	snprintf(g_tmp_dir, sizeof(g_tmp_dir), "/tmp/scoreboard_test_%d",
 		 (int)getpid());
+#endif
 	mkdir(g_tmp_dir, 0755);
 }
 

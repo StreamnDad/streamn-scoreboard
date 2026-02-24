@@ -36,6 +36,11 @@ if(BUILD_PLUGIN_MODULE)
       "(e.g. -DCMAKE_PREFIX_PATH=/path/to/Qt/5.15.2/gcc_64).")
   endif()
 
+  if(APPLE)
+    set(OBS_FRAMEWORKS_DIR "/Applications/OBS.app/Contents/Frameworks" CACHE PATH
+      "Path to OBS.app/Contents/Frameworks (for Qt and frontend API discovery)")
+  endif()
+
   # --- OBS SDK discovery ---
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
@@ -77,13 +82,13 @@ if(BUILD_PLUGIN_MODULE)
     if(OBS_FRONTEND_API_LIBRARY)
       set(_obs_frontend_api_library "${OBS_FRONTEND_API_LIBRARY}")
     elseif(APPLE)
-      if(EXISTS "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
-        set(_obs_frontend_api_library "/Applications/OBS.app/Contents/Frameworks/obs-frontend-api.dylib")
+      if(EXISTS "${OBS_FRAMEWORKS_DIR}/obs-frontend-api.dylib")
+        set(_obs_frontend_api_library "${OBS_FRAMEWORKS_DIR}/obs-frontend-api.dylib")
       else()
         find_library(_obs_frontend_api_library
           NAMES obs-frontend-api obs-frontend-api.dylib
           PATHS
-            /Applications/OBS.app/Contents/Frameworks
+            ${OBS_FRAMEWORKS_DIR}
             /opt/homebrew/lib
             /usr/local/lib
         )
@@ -171,23 +176,23 @@ if(BUILD_PLUGIN_MODULE)
 
     find_library(_obs_qt_core_library
       NAMES QtCore
-      PATHS /Applications/OBS.app/Contents/Frameworks
+      PATHS ${OBS_FRAMEWORKS_DIR}
       NO_DEFAULT_PATH
     )
     find_library(_obs_qt_gui_library
       NAMES QtGui
-      PATHS /Applications/OBS.app/Contents/Frameworks
+      PATHS ${OBS_FRAMEWORKS_DIR}
       NO_DEFAULT_PATH
     )
     find_library(_obs_qt_widgets_library
       NAMES QtWidgets
-      PATHS /Applications/OBS.app/Contents/Frameworks
+      PATHS ${OBS_FRAMEWORKS_DIR}
       NO_DEFAULT_PATH
     )
 
     if(NOT _obs_qt_core_library OR NOT _obs_qt_gui_library OR NOT _obs_qt_widgets_library)
       message(FATAL_ERROR
-        "OBS Qt frameworks not found under /Applications/OBS.app/Contents/Frameworks.")
+        "OBS Qt frameworks not found under ${OBS_FRAMEWORKS_DIR}.")
     endif()
   endif()
 
@@ -243,7 +248,7 @@ if(BUILD_PLUGIN_MODULE)
     )
     if(APPLE AND NOT _qt5_found)
       target_compile_options(streamn_obs_scoreboard PRIVATE
-        -F/Applications/OBS.app/Contents/Frameworks
+        -F${OBS_FRAMEWORKS_DIR}
         -F/opt/homebrew/opt/qt/lib
       )
     endif()
