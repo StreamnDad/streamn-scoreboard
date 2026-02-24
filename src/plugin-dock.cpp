@@ -21,7 +21,11 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPixmap>
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QtGui/QAction>
+#else
 #include <QtWidgets/QAction>
+#endif
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
@@ -109,6 +113,9 @@ QVector<penalty_row_widgets *> g_away_pen_rows;
 QVBoxLayout *g_queue_layout = nullptr;
 QWidget *g_queue_container = nullptr;
 QLabel *g_queue_empty_label = nullptr;
+QLabel *g_queue_title = nullptr;
+QFrame *g_queue_separator = nullptr;
+QScrollArea *g_queue_scroll = nullptr;
 QPushButton *g_clock_btn = nullptr;
 QTimer *g_tick_timer = nullptr;
 scoreboard_log_fn g_log_fn = nullptr;
@@ -404,6 +411,14 @@ void refresh_queue_placeholder()
 		}
 	}
 	g_queue_empty_label->setVisible(!has_rows);
+	/* Hide entire queue section when no jobs exist */
+	const bool show_section = !g_jobs.isEmpty();
+	if (g_queue_separator)
+		g_queue_separator->setVisible(show_section);
+	if (g_queue_title)
+		g_queue_title->setVisible(show_section);
+	if (g_queue_scroll)
+		g_queue_scroll->setVisible(show_section);
 }
 
 void complete_job(process_job *job, const QString &status)
@@ -611,6 +626,29 @@ void add_job_row(const QString &title, const QStringList &args)
 	start_job_process(job, args);
 }
 
+
+void clear_completed_jobs()
+{
+	QVector<process_job *> remaining;
+	for (process_job *job : g_jobs) {
+		if (!job)
+			continue;
+		if (job->completed) {
+			if (job->row) {
+				g_queue_layout->removeWidget(job->row);
+				job->row->hide();
+				job->row->deleteLater();
+			}
+			if (job->process)
+				job->process->deleteLater();
+			delete job;
+		} else {
+			remaining.push_back(job);
+		}
+	}
+	g_jobs = remaining;
+	refresh_queue_placeholder();
+}
 
 void fire_cli_event(scoreboard_event_type event)
 {
@@ -1115,6 +1153,77 @@ void open_clock_settings_dialog(QWidget *parent)
 					 cli_input->setText(path);
 			 });
 
+	QHBoxLayout *main_cfg_row = new QHBoxLayout();
+	main_cfg_row->addWidget(new QLabel("Main config:", &dialog));
+	QLineEdit *main_cfg_input = new QLineEdit(&dialog);
+	main_cfg_input->setText(
+		QString::fromUtf8(scoreboard_get_main_config_path()));
+	main_cfg_input->setPlaceholderText("/path/to/config.json");
+	QPushButton *main_cfg_browse = new QPushButton("Browse", &dialog);
+	main_cfg_row->addWidget(main_cfg_input, 1);
+	main_cfg_row->addWidget(main_cfg_browse);
+	layout->addLayout(main_cfg_row);
+
+	QObject::connect(main_cfg_browse, &QPushButton::clicked,
+			 [&dialog, main_cfg_input]() {
+				 const QString path =
+					 QFileDialog::getOpenFileName(
+						 &dialog,
+						 "Select Main Config",
+						 main_cfg_input->text(),
+						 "JSON Files (*.json);;All Files (*)");
+				 if (!path.isEmpty())
+					 main_cfg_input->setText(path);
+			 });
+
+	QHBoxLayout *override_cfg_row = new QHBoxLayout();
+	override_cfg_row->addWidget(
+		new QLabel("Override config:", &dialog));
+	QLineEdit *override_cfg_input = new QLineEdit(&dialog);
+	override_cfg_input->setText(
+		QString::fromUtf8(scoreboard_get_override_config_path()));
+	override_cfg_input->setPlaceholderText("/path/to/override.json");
+	QPushButton *override_cfg_browse =
+		new QPushButton("Browse", &dialog);
+	override_cfg_row->addWidget(override_cfg_input, 1);
+	override_cfg_row->addWidget(override_cfg_browse);
+	layout->addLayout(override_cfg_row);
+
+	QObject::connect(override_cfg_browse, &QPushButton::clicked,
+			 [&dialog, override_cfg_input]() {
+				 const QString path =
+					 QFileDialog::getOpenFileName(
+						 &dialog,
+						 "Select Override Config",
+						 override_cfg_input->text(),
+						 "JSON Files (*.json);;All Files (*)");
+				 if (!path.isEmpty())
+					 override_cfg_input->setText(path);
+			 });
+
+	QHBoxLayout *env_file_row = new QHBoxLayout();
+	env_file_row->addWidget(
+		new QLabel("Environment file:", &dialog));
+	QLineEdit *env_file_input = new QLineEdit(&dialog);
+	env_file_input->setText(g_environment_file);
+	env_file_input->setPlaceholderText("/path/to/.env");
+	QPushButton *env_file_browse = new QPushButton("Browse", &dialog);
+	env_file_row->addWidget(env_file_input, 1);
+	env_file_row->addWidget(env_file_browse);
+	layout->addLayout(env_file_row);
+
+	QObject::connect(env_file_browse, &QPushButton::clicked,
+			 [&dialog, env_file_input]() {
+				 const QString path =
+					 QFileDialog::getOpenFileName(
+						 &dialog,
+						 "Select Environment File",
+						 env_file_input->text(),
+						 "Env Files (*.env);;All Files (*)");
+				 if (!path.isEmpty())
+					 env_file_input->setText(path);
+			 });
+
 	QCheckBox *auto_hl_check =
 		new QCheckBox("Auto-generate period highlights on period "
 			      "change",
@@ -1139,8 +1248,17 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->value());
 		scoreboard_set_cli_executable(
 			cli_input->text().trimmed().toUtf8().constData());
+		scoreboard_set_main_config_path(
+			main_cfg_input->text().trimmed().toUtf8().constData());
+		scoreboard_set_override_config_path(
+			override_cfg_input->text()
+				.trimmed()
+				.toUtf8()
+				.constData());
+		g_environment_file = env_file_input->text().trimmed();
 		g_auto_highlights = auto_hl_check->isChecked();
 		save_profile_paths();
+		load_cli_config();
 		scoreboard_clock_reset();
 		update_all_labels();
 		update_highlights_button_visibility();
@@ -1741,17 +1859,51 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	g_highlights_btn->setVisible(false);
 	root->addWidget(g_highlights_btn);
 
-	/* Hidden process queue (used by CLI integration, not shown in dock) */
+	/* ---- SECTION: Process Queue (hidden until a job is added) ---- */
+	g_queue_separator = new QFrame(widget);
+	g_queue_separator->setFrameShape(QFrame::HLine);
+	g_queue_separator->setFrameShadow(QFrame::Sunken);
+	g_queue_separator->setFixedHeight(1);
+	g_queue_separator->setVisible(false);
+	root->addWidget(g_queue_separator);
+
+	g_queue_title = new QLabel("Process Queue", widget);
+	g_queue_title->setStyleSheet(kMutedStyle);
+	g_queue_title->setAlignment(Qt::AlignCenter);
+	g_queue_title->setVisible(false);
+	root->addWidget(g_queue_title);
+
 	g_queue_container = new QWidget();
 	g_queue_layout = new QVBoxLayout(g_queue_container);
 	g_queue_layout->setContentsMargins(0, 0, 0, 0);
 	g_queue_layout->setSpacing(0);
-	g_queue_empty_label = new QLabel("", g_queue_container);
+	g_queue_empty_label = new QLabel("No CLI jobs", g_queue_container);
+	g_queue_empty_label->setAlignment(Qt::AlignCenter);
+	g_queue_empty_label->setStyleSheet(kMutedStyle);
 	g_queue_layout->addWidget(g_queue_empty_label);
 	g_queue_layout->addStretch(1);
-	g_queue_container->hide();
+
+	g_queue_scroll = new QScrollArea(widget);
+	g_queue_scroll->setWidgetResizable(true);
+	g_queue_scroll->setWidget(g_queue_container);
+	g_queue_scroll->setFrameShape(QFrame::NoFrame);
+	g_queue_scroll->setVisible(false);
+	root->addWidget(g_queue_scroll);
 
 	root->addStretch(1);
+
+	g_queue_container->setContextMenuPolicy(Qt::CustomContextMenu);
+	QObject::connect(
+		g_queue_container, &QWidget::customContextMenuRequested,
+		[](const QPoint &pos) {
+			QMenu menu;
+			QAction *clear_action =
+				menu.addAction("Clear Completed Jobs");
+			QAction *chosen =
+				menu.exec(g_queue_container->mapToGlobal(pos));
+			if (chosen == clear_action)
+				clear_completed_jobs();
+		});
 
 	/* Connect signals */
 	QObject::connect(clock_minus_min, &QPushButton::clicked, []() {
@@ -1939,11 +2091,13 @@ void scoreboard_dock_shutdown(void)
 	g_away_pen_rows.clear();
 	g_home_pen_layout = nullptr;
 	g_away_pen_layout = nullptr;
-	if (g_queue_container) {
-		delete g_queue_container;
-		g_queue_container = nullptr;
-	}
+	/* g_queue_container is owned by the QScrollArea in the widget tree;
+	   it gets deleted when OBS removes the dock widget. */
+	g_queue_container = nullptr;
 	g_queue_layout = nullptr;
 	g_queue_empty_label = nullptr;
+	g_queue_title = nullptr;
+	g_queue_separator = nullptr;
+	g_queue_scroll = nullptr;
 	g_log_fn = nullptr;
 }

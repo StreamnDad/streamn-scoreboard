@@ -22,18 +22,32 @@ set(_extra_include_dirs "")
 set(_obs_frontend_include_dirs "")
 set(_obs_frontend_api_library "")
 set(_qt5_found OFF)
+set(_qt6_found OFF)
 
 if(BUILD_PLUGIN_MODULE)
-  # --- Qt5 discovery: find_package first, macOS framework fallback ---
-  find_package(Qt5 COMPONENTS Core Gui Widgets QUIET)
-  if(Qt5_FOUND)
-    set(_qt5_found ON)
-  elseif(APPLE)
-    # macOS fallback: search OBS.app bundled Qt frameworks
-  else()
-    message(FATAL_ERROR
-      "Qt5 was not found. Set CMAKE_PREFIX_PATH to your Qt5 installation "
-      "(e.g. -DCMAKE_PREFIX_PATH=/path/to/Qt/5.15.2/gcc_64).")
+  option(USE_OBS_QT_FRAMEWORKS
+    "Link against OBS.app's bundled Qt frameworks instead of system Qt (macOS only)" OFF)
+
+  # --- Qt discovery: prefer Qt6, fall back to Qt5, then macOS framework fallback ---
+  if(NOT USE_OBS_QT_FRAMEWORKS)
+    find_package(Qt6 COMPONENTS Core Gui Widgets QUIET)
+    if(Qt6_FOUND)
+      set(_qt6_found ON)
+    else()
+      find_package(Qt5 COMPONENTS Core Gui Widgets QUIET)
+      if(Qt5_FOUND)
+        set(_qt5_found ON)
+      endif()
+    endif()
+  endif()
+
+  if(NOT _qt6_found AND NOT _qt5_found)
+    if(APPLE)
+      # macOS fallback: search OBS.app bundled Qt frameworks
+    else()
+      message(FATAL_ERROR
+        "Neither Qt6 nor Qt5 was found. Set CMAKE_PREFIX_PATH to your Qt installation.")
+    endif()
   endif()
 
   if(APPLE)
@@ -163,16 +177,18 @@ configure_file(
 )
 
 if(BUILD_PLUGIN_MODULE)
-  # --- Qt5 macOS framework fallback (compat symlinks + find_library) ---
-  if(NOT _qt5_found AND APPLE)
+  # --- macOS framework fallback (compat symlinks + find_library) ---
+  # Compile against Qt headers from Homebrew; link against OBS.app's Qt
+  # frameworks.  Prefer Qt6 headers (matching OBS 32's runtime) over Qt5.
+  if(NOT _qt6_found AND NOT _qt5_found AND APPLE)
     set(_qt_compat_dir "${CMAKE_CURRENT_BINARY_DIR}/qt-compat")
     file(MAKE_DIRECTORY "${_qt_compat_dir}")
-    # Prefer qt@5 (Homebrew keg-only), fall back to unversioned qt
+    # Prefer unversioned qt (Qt6 on modern Homebrew), fall back to qt@5
     set(_qt_brew_prefixes
-      "/opt/homebrew/opt/qt@5/lib"
-      "/usr/local/opt/qt@5/lib"
       "/opt/homebrew/opt/qt/lib"
       "/usr/local/opt/qt/lib"
+      "/opt/homebrew/opt/qt@5/lib"
+      "/usr/local/opt/qt@5/lib"
     )
     set(_qt_header_base "")
     foreach(_prefix ${_qt_brew_prefixes})
@@ -229,7 +245,7 @@ if(BUILD_PLUGIN_MODULE)
   )
 
   # --- Include directories ---
-  if(_qt5_found)
+  if(_qt6_found OR _qt5_found)
     target_include_directories(streamn_obs_scoreboard
       PRIVATE
         include
@@ -263,7 +279,7 @@ if(BUILD_PLUGIN_MODULE)
     target_compile_options(streamn_obs_scoreboard PRIVATE
       -Wall -Wextra -Wpedantic
     )
-    if(APPLE AND NOT _qt5_found)
+    if(APPLE AND NOT _qt5_found AND NOT _qt6_found)
       target_compile_options(streamn_obs_scoreboard PRIVATE
         -F${OBS_FRAMEWORKS_DIR}
         -F/opt/homebrew/opt/qt/lib
@@ -280,11 +296,37 @@ if(BUILD_PLUGIN_MODULE)
   endif()
 
   # --- Link libraries ---
-  # On macOS with Qt5 from find_package, prevent OBS framework paths from
-  # polluting compile-time framework search (which shadows Qt5 headers).
+  # On macOS with Qt from find_package, prevent OBS framework paths from
+  # polluting compile-time framework search (which shadows Qt headers).
   # Wrap raw framework libraries in IMPORTED targets that only contribute
   # link flags, not -F compile flags.
-  if(APPLE AND _qt5_found)
+  if(APPLE AND _qt6_found)
+    add_library(_obs_link UNKNOWN IMPORTED)
+    set_target_properties(_obs_link PROPERTIES IMPORTED_LOCATION "${_obs_libraries}")
+    set_property(TARGET _obs_link PROPERTY IMPORTED_NO_SYSTEM ON)
+    add_library(_obs_frontend_link UNKNOWN IMPORTED)
+    set_target_properties(_obs_frontend_link PROPERTIES IMPORTED_LOCATION "${_obs_frontend_api_library}")
+    set_property(TARGET _obs_frontend_link PROPERTY IMPORTED_NO_SYSTEM ON)
+    target_link_libraries(streamn_obs_scoreboard
+      PRIVATE
+        scoreboard_core
+        _obs_link
+        _obs_frontend_link
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
+  elseif(_qt6_found)
+    target_link_libraries(streamn_obs_scoreboard
+      PRIVATE
+        scoreboard_core
+        ${_obs_libraries}
+        ${_obs_frontend_api_library}
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+    )
+  elseif(APPLE AND _qt5_found)
     add_library(_obs_link UNKNOWN IMPORTED)
     set_target_properties(_obs_link PROPERTIES IMPORTED_LOCATION "${_obs_libraries}")
     set_property(TARGET _obs_link PROPERTY IMPORTED_NO_SYSTEM ON)
