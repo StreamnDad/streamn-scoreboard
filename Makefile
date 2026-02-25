@@ -7,7 +7,7 @@ OBS_LIBRARY ?=
 OBS_SOURCE_DIR ?=
 SIMDE_INCLUDE_DIR ?=
 
-.PHONY: help setup find-obs-dev-paths configure build test coverage install run check-plugin-log dev clean reconfigure release
+.PHONY: help setup find-obs-dev-paths configure build test coverage install run check-plugin-log dev clean reconfigure release test-pkg
 
 help:
 	@echo "streamn-obs-scoreboard development targets"
@@ -27,6 +27,7 @@ help:
 	@echo "  check-plugin-log     Check latest OBS log for scoreboard plugin load lines"
 	@echo "  dev                  configure + build + test"
 	@echo "  release              Build macOS .pkg installer"
+	@echo "  test-pkg             Build .pkg, install it, and verify plugin loads"
 	@echo "  clean                Remove build directory"
 	@echo "  reconfigure          clean + configure"
 
@@ -88,6 +89,17 @@ dev: configure build test
 
 release:
 	./scripts/package-macos.sh
+
+test-pkg: release
+	@echo "Installing .pkg (requires admin password)..."
+	@PKG=$$(ls -t streamn-obs-scoreboard-*-macos.pkg 2>/dev/null | head -1); \
+	if [ -z "$$PKG" ]; then echo "Error: no .pkg found"; exit 1; fi; \
+	sudo installer -pkg "$$PKG" -target / && \
+	echo "" && \
+	echo "Installed. Verifying..." && \
+	ls -la ~/Library/Application\ Support/obs-studio/plugins/streamn-obs-scoreboard.plugin/Contents/MacOS/ && \
+	echo "" && \
+	echo "Success — restart OBS to test."
 
 clean:
 	rm -rf "$(BUILD_DIR)"

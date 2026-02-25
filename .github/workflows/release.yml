@@ -52,14 +52,13 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-      - name: Create plugin bundle
+      - name: Stage scripts and payload
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          PAYLOAD="/tmp/pkg-payload/streamn-obs-scoreboard.plugin/Contents"
-          mkdir -p "${PAYLOAD}/MacOS"
-          cp build/streamn-obs-scoreboard.so "${PAYLOAD}/MacOS/streamn-obs-scoreboard"
-          chmod +x "${PAYLOAD}/MacOS/streamn-obs-scoreboard"
-          cat > "${PAYLOAD}/Info.plist" <<PLIST
+          mkdir -p /tmp/pkg-scripts
+          cp build/streamn-obs-scoreboard.so /tmp/pkg-scripts/streamn-obs-scoreboard
+          chmod +x /tmp/pkg-scripts/streamn-obs-scoreboard
+          cat > /tmp/pkg-scripts/Info.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,6 +83,28 @@ jobs:
           </dict>
           </plist>
           PLIST
+          cat > /tmp/pkg-scripts/postinstall <<'SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(dirname "$0")"
+          if [ -n "${HOME}" ] && [ "${HOME}" != "/var/root" ]; then
+            REAL_HOME="${HOME}"
+          elif [ -n "${SUDO_USER}" ]; then
+            REAL_HOME=$(eval echo "~${SUDO_USER}")
+          else
+            REAL_HOME=$(eval echo "~${USER}")
+          fi
+          DEST="${REAL_HOME}/Library/Application Support/obs-studio/plugins"
+          BUNDLE="${DEST}/streamn-obs-scoreboard.plugin"
+          mkdir -p "$DEST"
+          rm -rf "${DEST}/streamn-obs-scoreboard"
+          rm -rf "${BUNDLE}"
+          mkdir -p "${BUNDLE}/Contents/MacOS"
+          cp "${SCRIPT_DIR}/streamn-obs-scoreboard" "${BUNDLE}/Contents/MacOS/"
+          cp "${SCRIPT_DIR}/Info.plist" "${BUNDLE}/Contents/"
+          OWNER=$(stat -f '%Su' "${REAL_HOME}")
+          chown -R "${OWNER}" "${BUNDLE}"
+          SCRIPT
+          chmod +x /tmp/pkg-scripts/postinstall
 
       - name: Code sign (optional)
         if: env.MACOS_SIGNING_CERT != ''
@@ -101,30 +122,16 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "" build.keychain
           codesign --force --sign "$MACOS_SIGNING_IDENTITY" \
-            --options runtime \
-            "/tmp/pkg-payload/streamn-obs-scoreboard.plugin/Contents/MacOS/streamn-obs-scoreboard"
+            --options runtime /tmp/pkg-scripts/streamn-obs-scoreboard
 
       - name: Package .pkg
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          SCRIPTS="/tmp/pkg-scripts"
-          mkdir -p "$SCRIPTS"
-          cat > "${SCRIPTS}/postinstall" <<'SCRIPT'
-          #!/bin/bash
-          DEST="${HOME}/Library/Application Support/obs-studio/plugins"
-          mkdir -p "$DEST"
-          rm -rf "${DEST}/streamn-obs-scoreboard"
-          rm -rf "${DEST}/streamn-obs-scoreboard.plugin"
-          cp -R "/tmp/streamn-obs-scoreboard.plugin" "$DEST/"
-          rm -rf "/tmp/streamn-obs-scoreboard.plugin"
-          SCRIPT
-          chmod +x "${SCRIPTS}/postinstall"
           pkgbuild \
-            --root /tmp/pkg-payload \
-            --scripts "$SCRIPTS" \
+            --nopayload \
+            --scripts /tmp/pkg-scripts \
             --identifier com.streamndad.streamn-obs-scoreboard \
             --version "$VERSION" \
-            --install-location /tmp \
             "streamn-obs-scoreboard-${VERSION}-macos.pkg"
 
       - name: Notarize (optional)
