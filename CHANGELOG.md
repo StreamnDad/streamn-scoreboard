@@ -4,6 +4,12 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-02-25
+
+### Fixed
+- Fixed macOS `.pkg` installer not being found by OBS — now installs as a proper `.plugin` bundle to the user-level plugins directory (`~/Library/Application Support/obs-studio/plugins/`)
+- Updated README macOS install instructions with Gatekeeper workaround (right-click > Open)
+
 ## [0.2.1] - 2026-02-25
 
 ### Fixed

@@ -52,6 +52,39 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      - name: Create plugin bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PAYLOAD="/tmp/pkg-payload/streamn-obs-scoreboard.plugin/Contents"
+          mkdir -p "${PAYLOAD}/MacOS"
+          cp build/streamn-obs-scoreboard.so "${PAYLOAD}/MacOS/streamn-obs-scoreboard"
+          chmod +x "${PAYLOAD}/MacOS/streamn-obs-scoreboard"
+          cat > "${PAYLOAD}/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>streamn-obs-scoreboard</string>
+            <key>CFBundleIdentifier</key>
+            <string>com.streamndad.streamn-obs-scoreboard</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>streamn-obs-scoreboard</string>
+            <key>CFBundlePackageType</key>
+            <string>BNDL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>11.0</string>
+          </dict>
+          </plist>
+          PLIST
+
       - name: Code sign (optional)
         if: env.MACOS_SIGNING_CERT != ''
         env:
@@ -68,19 +101,30 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "" build.keychain
           codesign --force --sign "$MACOS_SIGNING_IDENTITY" \
-            --options runtime build/streamn-obs-scoreboard.so
+            --options runtime \
+            "/tmp/pkg-payload/streamn-obs-scoreboard.plugin/Contents/MacOS/streamn-obs-scoreboard"
 
       - name: Package .pkg
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          STAGING="/tmp/pkg-root/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard/bin"
-          mkdir -p "$STAGING"
-          cp build/streamn-obs-scoreboard.so "$STAGING/"
+          SCRIPTS="/tmp/pkg-scripts"
+          mkdir -p "$SCRIPTS"
+          cat > "${SCRIPTS}/postinstall" <<'SCRIPT'
+          #!/bin/bash
+          DEST="${HOME}/Library/Application Support/obs-studio/plugins"
+          mkdir -p "$DEST"
+          rm -rf "${DEST}/streamn-obs-scoreboard"
+          rm -rf "${DEST}/streamn-obs-scoreboard.plugin"
+          cp -R "/tmp/streamn-obs-scoreboard.plugin" "$DEST/"
+          rm -rf "/tmp/streamn-obs-scoreboard.plugin"
+          SCRIPT
+          chmod +x "${SCRIPTS}/postinstall"
           pkgbuild \
-            --root /tmp/pkg-root \
+            --root /tmp/pkg-payload \
+            --scripts "$SCRIPTS" \
             --identifier com.streamndad.streamn-obs-scoreboard \
             --version "$VERSION" \
-            --install-location / \
+            --install-location /tmp \
             "streamn-obs-scoreboard-${VERSION}-macos.pkg"
 
       - name: Notarize (optional)

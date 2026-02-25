@@ -38,10 +38,11 @@ For general information about installing OBS plugins, see the [OBS Plugins Guide
 ### macOS
 
 1. Download `streamn-obs-scoreboard-x.y.z-macos.pkg`
-2. Double-click the `.pkg` file and follow the installer prompts
-3. Restart OBS Studio
+2. **Right-click** (or Control-click) the `.pkg` file and choose **Open** — this is required because the package is not yet notarized with Apple. If you double-click instead, macOS will block it. You can also go to **System Settings > Privacy & Security** and click **Open Anyway** after a blocked attempt.
+3. Follow the installer prompts
+4. Restart OBS Studio
 
-The installer places the plugin in `~/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard/bin/`.
+The installer places the plugin in `~/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard.plugin/`.
 
 ### Windows
 
