@@ -31,24 +31,48 @@ Build your own scorebug overlay using OBS Text sources pointed at the output fil
 
 ## Installation
 
+Download the latest release for your platform from the [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases) page. Each download contains a single plugin file (`.so`, `.dll`, or `.pkg`) that you copy into your OBS plugins folder.
+
+For general information about installing OBS plugins, see the [OBS Plugins Guide](https://obsproject.com/kb/plugins-guide).
+
 ### macOS
 
-Download the latest `.pkg` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases), run it, and restart OBS. The plugin installs to `~/Library/Application Support/obs-studio/plugins/`.
+1. Download `streamn-obs-scoreboard-x.y.z-macos.pkg`
+2. Double-click the `.pkg` file and follow the installer prompts
+3. Restart OBS Studio
+
+The installer places the plugin in `~/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard/bin/`.
 
 ### Windows
 
-Download the latest `.zip` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases). Extract and copy `obs-plugins/64bit/streamn-obs-scoreboard.dll` to your OBS plugins folder (typically `C:\Program Files\obs-studio\obs-plugins\64bit\`). Restart OBS.
+1. Download `streamn-obs-scoreboard-x.y.z-windows-x64.zip`
+2. Extract the zip — it contains `obs-plugins/64bit/streamn-obs-scoreboard.dll`
+3. Copy `streamn-obs-scoreboard.dll` to your OBS plugins folder:
+   - **Recommended:** `C:\ProgramData\obs-studio\plugins\streamn-obs-scoreboard\bin\64bit\`
+   - **Alternative:** `C:\Program Files\obs-studio\obs-plugins\64bit\`
+4. Restart OBS Studio
 
 ### Linux
 
-Download the latest `.tar.gz` from [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases). Extract and copy `obs-plugins/streamn-obs-scoreboard.so` to `~/.config/obs-studio/plugins/streamn-obs-scoreboard/bin/64bit/` or `/usr/lib/obs-plugins/`. Restart OBS.
+1. Download `streamn-obs-scoreboard-x.y.z-linux-x86_64.tar.gz`
+2. Extract the archive — it contains `obs-plugins/streamn-obs-scoreboard.so` (this is a shared library, the Linux equivalent of a `.dll`)
+3. Copy `streamn-obs-scoreboard.so` to your OBS plugins folder:
+   - **Per-user:** `~/.config/obs-studio/plugins/streamn-obs-scoreboard/bin/64bit/`
+   - **System-wide:** `/usr/lib/obs-plugins/`
+4. Restart OBS Studio
 
-### From source
+### After installation
+
+1. Open OBS Studio — the plugin loads automatically on startup
+2. Go to **View > Docks > Streamn Scoreboard** to enable the dock panel
+3. Dock it wherever you like in the OBS interface (drag the title bar to snap it into place)
+
+### Building from source
 
 ```bash
 # macOS
 make setup                    # Install prerequisites (requires Homebrew)
-make find-obs-dev-paths       # Find OBS development paths
+make find-obs-dev-paths       # Discover local OBS header/lib paths
 make dev OBS_INCLUDE_DIR=/path/to/obs/include OBS_LIBRARY=/path/to/libobs
 make install
 
