@@ -15,7 +15,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install cmake simde qt
+        run: brew install cmake simde
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
 
       - name: Clone OBS source (headers only)
         run: |
@@ -43,8 +48,7 @@ jobs:
             -DOBS_INCLUDE_DIR=/tmp/obs-studio/libobs \
             -DOBS_LIBRARY="${{ steps.obs-paths.outputs.frameworks_dir }}/libobs.framework/libobs" \
             -DOBS_SOURCE_DIR=/tmp/obs-studio \
-            -DOBS_FRAMEWORKS_DIR="${{ steps.obs-paths.outputs.frameworks_dir }}" \
-            -DUSE_OBS_QT_FRAMEWORKS=ON
+            -DOBS_FRAMEWORKS_DIR="${{ steps.obs-paths.outputs.frameworks_dir }}"
 
       - name: Build
         run: cmake --build build
