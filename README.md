@@ -68,6 +68,24 @@ The installer places the plugin in `~/Library/Application Support/obs-studio/plu
 2. Go to **View > Docks > Streamn Scoreboard** to enable the dock panel
 3. Dock it wherever you like in the OBS interface (drag the title bar to snap it into place)
 
+### Uninstalling
+
+**macOS:**
+```bash
+rm -rf ~/Library/Application\ Support/obs-studio/plugins/streamn-obs-scoreboard.plugin
+```
+
+**Windows:** Delete `streamn-obs-scoreboard.dll` from your OBS plugins folder.
+
+**Linux:**
+```bash
+rm -rf ~/.config/obs-studio/plugins/streamn-obs-scoreboard
+# or, if installed system-wide:
+sudo rm /usr/lib/obs-plugins/streamn-obs-scoreboard.so
+```
+
+Restart OBS after uninstalling.
+
 ### Building from source
 
 ```bash
