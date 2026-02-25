@@ -128,7 +128,24 @@ QPushButton *g_highlights_btn = nullptr;
 QProcess *g_highlights_process = nullptr;
 bool g_auto_highlights = false;
 
-obs_hotkey_id g_hotkey_ids[23];
+static const int kNumHotkeys = 23;
+
+static const char *kHotkeyNames[kNumHotkeys] = {
+	"sb_clock_startstop",  "sb_clock_reset",
+	"sb_clock_plus1min",   "sb_clock_minus1min",
+	"sb_clock_plus1sec",   "sb_clock_minus1sec",
+	"sb_home_goal_plus",   "sb_home_goal_minus",
+	"sb_home_shot_plus",   "sb_home_shot_minus",
+	"sb_away_goal_plus",   "sb_away_goal_minus",
+	"sb_away_shot_plus",   "sb_away_shot_minus",
+	"sb_period_advance",   "sb_period_rewind",
+	"sb_home_pen_add",     "sb_home_pen_clear1",
+	"sb_home_pen_clear2",  "sb_away_pen_add",
+	"sb_away_pen_clear1",  "sb_away_pen_clear2",
+	"sb_generate_highlights",
+};
+
+obs_hotkey_id g_hotkey_ids[kNumHotkeys];
 
 void log_info(const QString &message)
 {
@@ -1488,6 +1505,51 @@ void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
 		start_highlights_generation();
 }
 
+void save_hotkeys(obs_data_t *save_data, bool saving, void *private_data)
+{
+	(void)save_data;
+	(void)private_data;
+
+	config_t *profile_cfg = obs_frontend_get_profile_config();
+	if (!profile_cfg)
+		return;
+
+	if (saving) {
+		obs_data_t *obj = obs_data_create();
+		for (int i = 0; i < kNumHotkeys; i++) {
+			if (g_hotkey_ids[i] == OBS_INVALID_HOTKEY_ID)
+				continue;
+			obs_data_array_t *a = obs_hotkey_save(g_hotkey_ids[i]);
+			if (a) {
+				obs_data_set_array(obj, kHotkeyNames[i], a);
+				obs_data_array_release(a);
+			}
+		}
+		const char *json = obs_data_get_json(obj);
+		config_set_string(profile_cfg, kConfigSection, "hotkeys", json);
+		obs_data_release(obj);
+	} else {
+		const char *json =
+			config_get_string(profile_cfg, kConfigSection, "hotkeys");
+		if (!json)
+			return;
+		obs_data_t *obj = obs_data_create_from_json(json);
+		if (!obj)
+			return;
+		for (int i = 0; i < kNumHotkeys; i++) {
+			if (g_hotkey_ids[i] == OBS_INVALID_HOTKEY_ID)
+				continue;
+			obs_data_array_t *a =
+				obs_data_get_array(obj, kHotkeyNames[i]);
+			if (a) {
+				obs_hotkey_load(g_hotkey_ids[i], a);
+				obs_data_array_release(a);
+			}
+		}
+		obs_data_release(obj);
+	}
+}
+
 void register_hotkeys()
 {
 	int idx = 0;
@@ -1561,6 +1623,9 @@ void register_hotkeys()
 		"sb_generate_highlights",
 		"Streamn: Generate Period Highlights",
 		hk_generate_highlights, nullptr);
+
+	/* Register save/load callbacks to persist hotkey bindings */
+	obs_frontend_add_save_callback(save_hotkeys, nullptr);
 }
 
 void on_frontend_event(enum obs_frontend_event event, void *private_data)
@@ -2044,9 +2109,9 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 
 void scoreboard_dock_shutdown(void)
 {
-	/* Do NOT call unregister_hotkeys() here — OBS saves hotkey bindings
-	   during shutdown and cleans up hotkeys after module unload.
-	   Unregistering early destroys bindings before OBS persists them. */
+	/* Remove save callback before shutdown */
+	obs_frontend_remove_save_callback(save_hotkeys, nullptr);
+
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 	obs_frontend_remove_dock(kDockId);
 

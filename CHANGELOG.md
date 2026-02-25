@@ -4,6 +4,15 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-02-25
+
+### Fixed
+- Fixed OBS hotkey bindings not persisting across restarts (added explicit save/load via `obs_frontend_add_save_callback`)
+
+### Changed
+- Improved README installation instructions with step-by-step guides, post-install dock setup, and link to OBS Plugins Guide
+- Added dock UI and scorebug screenshots to README
+
 ## [0.2.0] - 2026-02-24
 
 ### Added
