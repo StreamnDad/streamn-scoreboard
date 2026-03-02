@@ -45,6 +45,10 @@ cp "${ARTIFACT}" "${PKG_SCRIPTS}/${PLUGIN_NAME}"
 chmod +x "${PKG_SCRIPTS}/${PLUGIN_NAME}"
 codesign --force --sign - "${PKG_SCRIPTS}/${PLUGIN_NAME}"
 
+if [ -f "${BUILD_DIR}/data/manifest.json" ]; then
+  cp "${BUILD_DIR}/data/manifest.json" "${PKG_SCRIPTS}/manifest.json"
+fi
+
 cat > "${PKG_SCRIPTS}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -94,8 +98,12 @@ rm -rf "${DEST}/streamn-obs-scoreboard"
 rm -rf "${BUNDLE}"
 
 mkdir -p "${BUNDLE}/Contents/MacOS"
+mkdir -p "${BUNDLE}/Contents/Resources"
 cp "${SCRIPT_DIR}/streamn-obs-scoreboard" "${BUNDLE}/Contents/MacOS/"
 cp "${SCRIPT_DIR}/Info.plist" "${BUNDLE}/Contents/"
+if [ -f "${SCRIPT_DIR}/manifest.json" ]; then
+  cp "${SCRIPT_DIR}/manifest.json" "${BUNDLE}/Contents/Resources/"
+fi
 
 # Ensure the installing user owns the files, not root
 OWNER=$(stat -f '%Su' "${REAL_HOME}")

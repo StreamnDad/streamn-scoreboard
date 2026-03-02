@@ -47,20 +47,18 @@ The installer places the plugin in `~/Library/Application Support/obs-studio/plu
 ### Windows
 
 1. Download `streamn-obs-scoreboard-x.y.z-windows-x64.zip`
-2. Extract the zip — it contains `obs-plugins/64bit/streamn-obs-scoreboard.dll`
-3. Copy `streamn-obs-scoreboard.dll` to your OBS plugins folder:
-   - **Recommended:** `C:\ProgramData\obs-studio\plugins\streamn-obs-scoreboard\bin\64bit\`
-   - **Alternative:** `C:\Program Files\obs-studio\obs-plugins\64bit\`
-4. Restart OBS Studio
+2. Extract the `streamn-obs-scoreboard` folder to your OBS plugins directory:
+   - **Recommended:** `C:\ProgramData\obs-studio\plugins\`
+   - **Alternative:** Copy just the `.dll` from `bin\64bit\` to `C:\Program Files\obs-studio\obs-plugins\64bit\`
+3. Restart OBS Studio
 
 ### Linux
 
 1. Download `streamn-obs-scoreboard-x.y.z-linux-x86_64.tar.gz`
-2. Extract the archive — it contains `obs-plugins/streamn-obs-scoreboard.so` (this is a shared library, the Linux equivalent of a `.dll`)
-3. Copy `streamn-obs-scoreboard.so` to your OBS plugins folder:
-   - **Per-user:** `~/.config/obs-studio/plugins/streamn-obs-scoreboard/bin/64bit/`
-   - **System-wide:** `/usr/lib/obs-plugins/`
-4. Restart OBS Studio
+2. Extract the `streamn-obs-scoreboard` folder to your OBS plugins directory:
+   - **Per-user:** `~/.config/obs-studio/plugins/`
+   - **Alternative:** Copy just the `.so` from `bin/64bit/` to `/usr/lib/obs-plugins/`
+3. Restart OBS Studio
 
 ### After installation
 

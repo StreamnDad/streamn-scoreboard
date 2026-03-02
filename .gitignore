@@ -10,6 +10,11 @@ compile_commands.json
 # macOS
 .DS_Store
 
+# Release artifacts
+*.pkg
+*.zip
+*.tar.gz
+
 # Windows build artifacts
 *.obj
 *.pdb

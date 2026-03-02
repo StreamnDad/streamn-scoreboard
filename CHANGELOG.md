@@ -4,6 +4,20 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-03-02
+
+### Fixed
+- Fixed Windows plugin failing to load — release was built against Qt 5 but OBS Studio 30 ships Qt 6
+- Fixed Windows and Linux release packages using incorrect directory structure for OBS plugin loading
+- Fixed CLI events firing when no CLI executable is configured (no longer spawns empty processes)
+
+### Added
+- OBS 32+ Plugin Manager metadata (`manifest.json`) now included in all platform packages
+- `images/text_files.png` screenshot for documentation
+
+### Changed
+- Updated Windows and Linux installation instructions in README to match corrected package structure
+
 ## [0.2.2] - 2026-02-25
 
 ### Fixed

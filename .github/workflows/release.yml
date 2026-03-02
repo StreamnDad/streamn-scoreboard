@@ -62,6 +62,7 @@ jobs:
           mkdir -p /tmp/pkg-scripts
           cp build/streamn-obs-scoreboard.so /tmp/pkg-scripts/streamn-obs-scoreboard
           chmod +x /tmp/pkg-scripts/streamn-obs-scoreboard
+          cp build/data/manifest.json /tmp/pkg-scripts/manifest.json
           cat > /tmp/pkg-scripts/Info.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -103,8 +104,12 @@ jobs:
           rm -rf "${DEST}/streamn-obs-scoreboard"
           rm -rf "${BUNDLE}"
           mkdir -p "${BUNDLE}/Contents/MacOS"
+          mkdir -p "${BUNDLE}/Contents/Resources"
           cp "${SCRIPT_DIR}/streamn-obs-scoreboard" "${BUNDLE}/Contents/MacOS/"
           cp "${SCRIPT_DIR}/Info.plist" "${BUNDLE}/Contents/"
+          if [ -f "${SCRIPT_DIR}/manifest.json" ]; then
+            cp "${SCRIPT_DIR}/manifest.json" "${BUNDLE}/Contents/Resources/"
+          fi
           OWNER=$(stat -f '%Su' "${REAL_HOME}")
           chown -R "${OWNER}" "${BUNDLE}"
           SCRIPT
@@ -231,11 +236,13 @@ jobs:
       - name: Package .tar.gz
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          STAGING="/tmp/tar-root/obs-plugins"
-          mkdir -p "$STAGING"
-          cp build/streamn-obs-scoreboard.so "$STAGING/"
+          STAGING="/tmp/tar-root/streamn-obs-scoreboard"
+          mkdir -p "$STAGING/bin/64bit"
+          mkdir -p "$STAGING/data"
+          cp build/streamn-obs-scoreboard.so "$STAGING/bin/64bit/"
+          cp build/data/manifest.json "$STAGING/data/"
           tar -czf "streamn-obs-scoreboard-${VERSION}-linux-x86_64.tar.gz" \
-            -C /tmp/tar-root obs-plugins
+            -C /tmp/tar-root streamn-obs-scoreboard
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -254,11 +261,10 @@ jobs:
         with:
           arch: x64
 
-      - name: Install Qt5
+      - name: Install Qt 6.8.3
         uses: jurplel/install-qt-action@v4
         with:
-          version: '5.15.2'
-          arch: 'win64_msvc2019_64'
+          version: '6.8.3'
 
       - name: Clone OBS source (headers only)
         run: |
@@ -334,10 +340,13 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
-          $staging = "pkg-root/obs-plugins/64bit"
-          New-Item -ItemType Directory -Force -Path $staging
-          Copy-Item "build/RelWithDebInfo/streamn-obs-scoreboard.dll" $staging
-          Compress-Archive -Path "pkg-root/obs-plugins" `
+          $binDir = "pkg-root/streamn-obs-scoreboard/bin/64bit"
+          $dataDir = "pkg-root/streamn-obs-scoreboard/data"
+          New-Item -ItemType Directory -Force -Path $binDir
+          New-Item -ItemType Directory -Force -Path $dataDir
+          Copy-Item "build/RelWithDebInfo/streamn-obs-scoreboard.dll" $binDir
+          Copy-Item "build/data/manifest.json" $dataDir
+          Compress-Archive -Path "pkg-root/streamn-obs-scoreboard" `
             -DestinationPath "streamn-obs-scoreboard-${version}-windows-x64.zip"
 
       - name: Upload artifact

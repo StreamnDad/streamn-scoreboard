@@ -671,6 +671,10 @@ void fire_cli_event(scoreboard_event_type event)
 {
 	if (!g_cli_actions.contains(static_cast<int>(event)))
 		return;
+	const QString executable =
+		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
+	if (executable.isEmpty())
+		return;
 	const cli_action_binding action =
 		g_cli_actions.value(static_cast<int>(event));
 	const QString event_str = event_name(event);

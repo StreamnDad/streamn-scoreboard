@@ -33,6 +33,12 @@ cp "${ARTIFACT}" "${TARGET_MACOS_DIR}/${PLUGIN_NAME}"
 chmod +x "${TARGET_MACOS_DIR}/${PLUGIN_NAME}"
 codesign --force --sign - "${TARGET_MACOS_DIR}/${PLUGIN_NAME}"
 
+TARGET_RESOURCES_DIR="${TARGET_BUNDLE_DIR}/Contents/Resources"
+mkdir -p "${TARGET_RESOURCES_DIR}"
+if [ -f "${BUILD_DIR}/data/manifest.json" ]; then
+  cp "${BUILD_DIR}/data/manifest.json" "${TARGET_RESOURCES_DIR}/manifest.json"
+fi
+
 cat > "${TARGET_INFO_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

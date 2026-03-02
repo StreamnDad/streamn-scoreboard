@@ -1,0 +1,11 @@
+{
+  "display_name": "Streamn Scoreboard",
+  "name": "streamn-obs-scoreboard",
+  "id": "com.streamndad.streamn-obs-scoreboard",
+  "version": "@PROJECT_VERSION@",
+  "description": "Tracks youth hockey scoreboard state and writes to individual text files for OBS overlay composition",
+  "urls": {
+    "repository": "https://github.com/StreamnDad/streamn-scoreboard",
+    "website": "https://github.com/StreamnDad/streamn-scoreboard"
+  }
+}

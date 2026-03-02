@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(streamn_obs_scoreboard VERSION 0.2.2 LANGUAGES C CXX)
+project(streamn_obs_scoreboard VERSION 0.2.3 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -174,6 +174,11 @@ endif()
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/src/plugin-version.h.in
   ${CMAKE_CURRENT_BINARY_DIR}/plugin-version.h
+)
+
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/data/manifest.json.in
+  ${CMAKE_CURRENT_BINARY_DIR}/data/manifest.json
 )
 
 if(BUILD_PLUGIN_MODULE)
