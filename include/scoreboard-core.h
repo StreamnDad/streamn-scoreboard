@@ -22,6 +22,31 @@ enum scoreboard_clock_direction {
 	SCOREBOARD_CLOCK_COUNT_UP
 };
 
+enum scoreboard_sport {
+	SCOREBOARD_SPORT_HOCKEY = 0,
+	SCOREBOARD_SPORT_BASKETBALL,
+	SCOREBOARD_SPORT_SOCCER,
+	SCOREBOARD_SPORT_FOOTBALL,
+	SCOREBOARD_SPORT_LACROSSE,
+	SCOREBOARD_SPORT_RUGBY,
+	SCOREBOARD_SPORT_GENERIC,
+	SCOREBOARD_SPORT_COUNT
+};
+
+struct scoreboard_sport_preset {
+	enum scoreboard_sport sport;
+	char segment_name[16];
+	int segment_count;
+	int duration_seconds;
+	int ot_max;
+	bool has_shots;
+	bool has_penalties;
+	enum scoreboard_clock_direction default_direction;
+	bool has_fouls;
+	char foul_label[16];
+	char foul_label2[16];
+};
+
 struct scoreboard_penalty {
 	int player_number;
 	int remaining_tenths;
@@ -90,6 +115,26 @@ void scoreboard_set_away_shots(int shots);
 void scoreboard_increment_away_shots(void);
 void scoreboard_decrement_away_shots(void);
 
+/* Fouls / cards / flags (simple per-team counter) */
+int scoreboard_get_home_fouls(void);
+void scoreboard_set_home_fouls(int fouls);
+void scoreboard_increment_home_fouls(void);
+void scoreboard_decrement_home_fouls(void);
+int scoreboard_get_away_fouls(void);
+void scoreboard_set_away_fouls(int fouls);
+void scoreboard_increment_away_fouls(void);
+void scoreboard_decrement_away_fouls(void);
+
+/* Fouls2 — second foul counter (e.g. soccer red cards) */
+int scoreboard_get_home_fouls2(void);
+void scoreboard_set_home_fouls2(int fouls);
+void scoreboard_increment_home_fouls2(void);
+void scoreboard_decrement_home_fouls2(void);
+int scoreboard_get_away_fouls2(void);
+void scoreboard_set_away_fouls2(int fouls);
+void scoreboard_increment_away_fouls2(void);
+void scoreboard_decrement_away_fouls2(void);
+
 #define SCOREBOARD_MAX_PENALTIES 8
 
 /* Penalties (up to SCOREBOARD_MAX_PENALTIES per team) */
@@ -110,6 +155,10 @@ void scoreboard_format_penalty_time(int slot, bool home, char *buf,
 void scoreboard_format_all_penalty_numbers(bool home, char *buf, size_t size);
 void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size);
 
+/* Dirty flag — true when internal state has changed since last write */
+bool scoreboard_is_dirty(void);
+void scoreboard_mark_dirty(void);
+
 /* File output */
 void scoreboard_set_output_directory(const char *path);
 const char *scoreboard_get_output_directory(void);
@@ -126,10 +175,22 @@ void scoreboard_new_game(void);
 /* CLI settings */
 void scoreboard_set_cli_executable(const char *path);
 const char *scoreboard_get_cli_executable(void);
-void scoreboard_set_main_config_path(const char *path);
-const char *scoreboard_get_main_config_path(void);
-void scoreboard_set_override_config_path(const char *path);
-const char *scoreboard_get_override_config_path(void);
+void scoreboard_set_cli_extra_args(const char *args);
+const char *scoreboard_get_cli_extra_args(void);
+
+/* Sport presets */
+void scoreboard_set_sport(enum scoreboard_sport sport);
+enum scoreboard_sport scoreboard_get_sport(void);
+const struct scoreboard_sport_preset *scoreboard_get_sport_preset(void);
+const char *scoreboard_sport_name(enum scoreboard_sport sport);
+enum scoreboard_sport scoreboard_sport_from_name(const char *name);
+const char *scoreboard_get_segment_name(void);
+bool scoreboard_get_has_shots(void);
+bool scoreboard_get_has_penalties(void);
+bool scoreboard_get_has_fouls(void);
+const char *scoreboard_get_foul_label(void);
+bool scoreboard_get_has_fouls2(void);
+const char *scoreboard_get_foul_label2(void);
 
 /* Action log */
 void scoreboard_add_action_log(const char *message);

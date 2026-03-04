@@ -445,6 +445,125 @@ static void test_overtime_enabled(void)
 	assert(scoreboard_get_overtime_enabled());
 }
 
+static void test_dirty_reset_clears(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_start(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_start();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_stop(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_stop();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_reset(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_reset();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_tick_running(void)
+{
+	/* Start clock, clear dirty via write, then tick — should set dirty */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory("/tmp");
+	scoreboard_clock_start();
+	scoreboard_write_all_files();
+	assert(!scoreboard_is_dirty());
+	scoreboard_clock_tick(1);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_tick_stopped(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+	scoreboard_clock_tick(1);
+	assert(!scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_set_tenths(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_set_tenths(100);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_adjust_seconds(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_adjust_seconds(1);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_clock_adjust_minutes(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_adjust_minutes(1);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_set_clock_direction(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_clock_direction(SCOREBOARD_CLOCK_COUNT_UP);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_set_period_length(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_length(600);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_set_period(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period(2);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_period_advance(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_period_advance();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_period_rewind(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period(3);
+	scoreboard_period_rewind();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_set_overtime_enabled(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_overtime_enabled(false);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_mark_dirty(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+	scoreboard_mark_dirty();
+	assert(scoreboard_is_dirty());
+}
+
 int main(void)
 {
 	test_description();
@@ -482,6 +601,22 @@ int main(void)
 	test_penalty_clear_after_adjust();
 	test_penalty_adjust_positive_delta();
 	test_overtime_enabled();
+	test_dirty_reset_clears();
+	test_dirty_clock_start();
+	test_dirty_clock_stop();
+	test_dirty_clock_reset();
+	test_dirty_clock_tick_running();
+	test_dirty_clock_tick_stopped();
+	test_dirty_clock_set_tenths();
+	test_dirty_clock_adjust_seconds();
+	test_dirty_clock_adjust_minutes();
+	test_dirty_set_clock_direction();
+	test_dirty_set_period_length();
+	test_dirty_set_period();
+	test_dirty_period_advance();
+	test_dirty_period_rewind();
+	test_dirty_set_overtime_enabled();
+	test_dirty_mark_dirty();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
 	return 0;

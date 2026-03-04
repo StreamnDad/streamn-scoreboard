@@ -441,6 +441,71 @@ static void test_format_all_penalty_times_small_buf(void)
 	assert(strcmp(buf, "2:00") == 0);
 }
 
+static void test_dirty_home_penalty_add(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_home_penalty_clear(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	/* penalty_add sets dirty; clear also sets dirty */
+	scoreboard_home_penalty_clear(0);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_penalty_add(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(22, 120);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_penalty_clear(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(22, 120);
+	scoreboard_away_penalty_clear(0);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_penalty_tick_active(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_set_output_directory("/tmp");
+	scoreboard_mark_dirty();
+	scoreboard_write_all_files();
+	assert(!scoreboard_is_dirty());
+	scoreboard_penalty_tick(10);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_penalty_tick_no_active(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+	scoreboard_penalty_tick(10);
+	assert(!scoreboard_is_dirty());
+}
+
+static void test_dirty_penalty_adjust(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_set_output_directory("/tmp");
+	scoreboard_mark_dirty();
+	scoreboard_write_all_files();
+	assert(!scoreboard_is_dirty());
+	scoreboard_penalty_adjust(100);
+	assert(scoreboard_is_dirty());
+}
+
 int main(void)
 {
 	test_home_penalty_add();
@@ -483,6 +548,13 @@ int main(void)
 	test_format_all_penalties_order_stable();
 	test_format_all_penalty_numbers_small_buf();
 	test_format_all_penalty_times_small_buf();
+	test_dirty_home_penalty_add();
+	test_dirty_home_penalty_clear();
+	test_dirty_away_penalty_add();
+	test_dirty_away_penalty_clear();
+	test_dirty_penalty_tick_active();
+	test_dirty_penalty_tick_no_active();
+	test_dirty_penalty_adjust();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

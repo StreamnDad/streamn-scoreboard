@@ -4,6 +4,50 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-03-03
+
+### Changed
+- Renamed "Streamn CLI" to "reeln-cli" in Game Settings dialog with clickable link to repository
+- Simplified CLI integration: period advance fires `reeln game segment {period}` automatically
+- Removed main config and override config fields (replaced by hardcoded reeln-cli commands)
+- Removed auto-highlights checkbox (segment command fires automatically on period advance)
+- Goal scoring and new game no longer fire CLI commands
+- Highlights button and period advance are disabled while clock is running
+- Highlights button text is now sport-aware (e.g. "Generate Quarter Highlights" for basketball)
+
+### Added
+- "CLI arguments" text field in Game Settings for extra args (e.g. `--profile my-profile`)
+- Mid-period confirmation dialog when generating highlights or advancing period with clock stopped mid-segment
+- "Game Finished" checkbox next to highlights button — switches to `reeln game highlights` command
+
+## [0.3.0] - 2026-03-03
+
+### Added
+- Multi-sport support: hockey, basketball, soccer, football, lacrosse, rugby, and generic sport presets
+- Sport selector dropdown in Game Settings dialog
+- Sport-specific segment naming in dock UI (Period, Quarter, Half, Segment)
+- `sport.txt` output file for CLI integration
+- Sport field in JSON state persistence
+- File watcher monitors `sport.txt` for external sport changes
+- Foul/card/flag counter for basketball ("Fouls"), soccer ("YC"/"RC"), and football ("Flags") with +/- buttons in dock UI
+- Soccer split yellow card (YC) and red card (RC) into separate counter rows
+- `home_fouls.txt`, `away_fouls.txt`, `home_fouls2.txt`, `away_fouls2.txt` output files for foul counters
+- Fouls and fouls2 persisted in JSON state and text file round-trips
+- 8 new OBS hotkeys for foul counters: Home/Away Foul +/-, Home/Away Foul2 +/-
+- Rugby preset: 2 halves, 40-minute periods, count-up clock, sin-bin penalties
+- 31 new sport preset and foul tests (`test-scoreboard-core-sport.c`)
+
+### Changed
+- **Soccer: "Cards" counter split into "YC" (yellow cards) and "RC" (red cards).** `home_fouls.txt`/`away_fouls.txt` now represent yellow cards only. Add OBS Text sources for the new `home_fouls2.txt`/`away_fouls2.txt` files to display red cards.
+- Period/overtime logic now driven by sport preset (segment count + OT max) instead of hardcoded hockey values
+- Shots row automatically hides for sports without shots (basketball, soccer, football, generic)
+- Penalty section automatically hides for sports without penalties (basketball, soccer, football, generic)
+- Game Settings dialog label changed from "Period length" to "Segment length" to align with reeln-cli vernacular
+- Sport dropdown in Game Settings live-previews default duration, direction, and penalty visibility
+- Lacrosse preset includes penalty support (same timed model as hockey)
+- Fouls row automatically shows for sports with fouls (basketball, soccer, football) with sport-specific label
+- Second foul row (fouls2) automatically shows for soccer (red cards)
+
 ## [0.2.3] - 2026-03-02
 
 ### Fixed

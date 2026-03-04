@@ -150,6 +150,7 @@ static void test_write_all_files_no_directory(void)
 {
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_output_directory("");
+	scoreboard_mark_dirty();
 	assert(!scoreboard_write_all_files());
 }
 
@@ -157,6 +158,7 @@ static void test_write_all_files_null_directory(void)
 {
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_output_directory(NULL);
+	scoreboard_mark_dirty();
 	assert(!scoreboard_write_all_files());
 }
 
@@ -322,17 +324,13 @@ static void test_cli_settings(void)
 {
 	scoreboard_reset_state_for_tests();
 
-	scoreboard_set_cli_executable("/usr/local/bin/streamn");
+	scoreboard_set_cli_executable("/usr/local/bin/reeln");
 	assert(strcmp(scoreboard_get_cli_executable(),
-		     "/usr/local/bin/streamn") == 0);
+		     "/usr/local/bin/reeln") == 0);
 
-	scoreboard_set_main_config_path("/home/user/config.json");
-	assert(strcmp(scoreboard_get_main_config_path(),
-		     "/home/user/config.json") == 0);
-
-	scoreboard_set_override_config_path("/home/user/override.json");
-	assert(strcmp(scoreboard_get_override_config_path(),
-		     "/home/user/override.json") == 0);
+	scoreboard_set_cli_extra_args("--profile test");
+	assert(strcmp(scoreboard_get_cli_extra_args(),
+		     "--profile test") == 0);
 }
 
 static void test_cli_settings_null(void)
@@ -340,16 +338,15 @@ static void test_cli_settings_null(void)
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_cli_executable(NULL);
 	assert(strcmp(scoreboard_get_cli_executable(), "") == 0);
-	scoreboard_set_main_config_path(NULL);
-	assert(strcmp(scoreboard_get_main_config_path(), "") == 0);
-	scoreboard_set_override_config_path(NULL);
-	assert(strcmp(scoreboard_get_override_config_path(), "") == 0);
+	scoreboard_set_cli_extra_args(NULL);
+	assert(strcmp(scoreboard_get_cli_extra_args(), "") == 0);
 }
 
 static void test_write_all_files_bad_directory(void)
 {
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_output_directory("/nonexistent/path/that/does/not/exist");
+	scoreboard_mark_dirty();
 	assert(!scoreboard_write_all_files());
 }
 
@@ -921,6 +918,109 @@ static void test_startup_sequence_simulation(void)
 	cleanup_tmp_dir();
 }
 
+static void test_dirty_write_skips_when_clean(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_home_name("Eagles");
+
+	/* First write should succeed (state is dirty from set_home_name) */
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+	assert(!scoreboard_is_dirty());
+
+	/* Second write should no-op (not dirty), return true */
+	ok = scoreboard_write_all_files();
+	assert(ok);
+	assert(!scoreboard_is_dirty());
+
+	cleanup_tmp_dir();
+}
+
+static void test_dirty_write_when_dirty(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_home_name("Eagles");
+	assert(scoreboard_is_dirty());
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+	assert(!scoreboard_is_dirty());
+
+	/* Verify file was written */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_name.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "Eagles") == 0);
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_dirty_read_all_files_clears(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+
+	write_file(g_tmp_dir, "clock.txt", "10:00");
+	write_file(g_tmp_dir, "period.txt", "1");
+	write_file(g_tmp_dir, "home_name.txt", "Eagles");
+	write_file(g_tmp_dir, "away_name.txt", "Hawks");
+	write_file(g_tmp_dir, "home_score.txt", "0");
+	write_file(g_tmp_dir, "away_score.txt", "0");
+	write_file(g_tmp_dir, "home_shots.txt", "0");
+	write_file(g_tmp_dir, "away_shots.txt", "0");
+	write_file(g_tmp_dir, "home_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "home_penalty_times.txt", "");
+	write_file(g_tmp_dir, "away_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "away_penalty_times.txt", "");
+
+	scoreboard_read_all_files();
+	assert(!scoreboard_is_dirty());
+
+	cleanup_tmp_dir();
+}
+
+static void test_dirty_load_state_sets(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	scoreboard_set_home_name("Eagles");
+	char path[512];
+	snprintf(path, sizeof(path), "%s/state.json", g_tmp_dir);
+	scoreboard_save_state(path);
+
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+
+	scoreboard_load_state(path);
+	assert(scoreboard_is_dirty());
+
+	cleanup_tmp_dir();
+}
+
+static void test_dirty_write_no_dir_not_dirty(void)
+{
+	/* write_all_files with no output directory: not dirty → returns true */
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+	assert(scoreboard_write_all_files());
+}
+
+static void test_dirty_write_no_dir_dirty(void)
+{
+	/* write_all_files with no output directory: dirty → returns false */
+	scoreboard_reset_state_for_tests();
+	scoreboard_mark_dirty();
+	assert(!scoreboard_write_all_files());
+}
+
 int main(void)
 {
 	test_write_all_files();
@@ -960,6 +1060,12 @@ int main(void)
 	test_write_read_round_trip();
 	test_reset_state_wipes_output_directory();
 	test_startup_sequence_simulation();
+	test_dirty_write_skips_when_clean();
+	test_dirty_write_when_dirty();
+	test_dirty_read_all_files_clears();
+	test_dirty_load_state_sets();
+	test_dirty_write_no_dir_not_dirty();
+	test_dirty_write_no_dir_dirty();
 
 	printf("All scoreboard-core persistence tests passed.\n");
 	return 0;

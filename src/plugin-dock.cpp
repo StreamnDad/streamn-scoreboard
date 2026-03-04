@@ -8,14 +8,12 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
-#include <QtCore/QJsonValue>
 #include <QtCore/QProcess>
 #include <QtCore/QProcessEnvironment>
 #include <QtCore/QStringList>
 #include <QtCore/QTextStream>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QFileSystemWatcher>
 #include <QtCore/QTimer>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
@@ -27,6 +25,7 @@
 #include <QtWidgets/QAction>
 #endif
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QFileDialog>
@@ -51,19 +50,8 @@ const char *kDockTitle = "Streamn Scoreboard";
 const char *kConfigSection = "streamn-obs-scoreboard";
 const char *kOutputDirKey = "output_directory";
 const char *kCliExecutableKey = "cli_executable";
-const char *kMainConfigKey = "main_config_path";
-const char *kOverrideConfigKey = "override_config_path";
+const char *kCliExtraArgsKey = "cli_extra_args";
 const char *kEnvFileKey = "environment_file";
-const char *kAutoHighlightsKey = "auto_highlights";
-
-enum scoreboard_event_type {
-	SB_EVENT_NONE = 0,
-	SB_EVENT_HOME_GOAL,
-	SB_EVENT_AWAY_GOAL,
-	SB_EVENT_PERIOD_CHANGE,
-	SB_EVENT_GAME_START,
-	SB_EVENT_GAME_END,
-};
 
 struct process_job {
 	int id = 0;
@@ -79,13 +67,6 @@ struct process_job {
 	QString stderr_log;
 	bool running = false;
 	bool completed = false;
-};
-
-struct cli_action_binding {
-	QString command = "publish";
-	QString subcommand = "trigger";
-	QStringList args_template;
-	QStringList extra_args;
 };
 
 struct penalty_row_widgets {
@@ -110,6 +91,17 @@ QVBoxLayout *g_home_pen_layout = nullptr;
 QVBoxLayout *g_away_pen_layout = nullptr;
 QVector<penalty_row_widgets *> g_home_pen_rows;
 QVector<penalty_row_widgets *> g_away_pen_rows;
+QWidget *g_shots_row_widget = nullptr;
+QWidget *g_fouls_row_widget = nullptr;
+QLabel *g_home_fouls_label = nullptr;
+QLabel *g_away_fouls_label = nullptr;
+QLabel *g_fouls_center_label = nullptr;
+QWidget *g_fouls2_row_widget = nullptr;
+QLabel *g_home_fouls2_label = nullptr;
+QLabel *g_away_fouls2_label = nullptr;
+QLabel *g_fouls2_center_label = nullptr;
+QWidget *g_penalty_section_widget = nullptr;
+QFrame *g_penalty_separator = nullptr;
 QVBoxLayout *g_queue_layout = nullptr;
 QWidget *g_queue_container = nullptr;
 QLabel *g_queue_empty_label = nullptr;
@@ -118,17 +110,18 @@ QFrame *g_queue_separator = nullptr;
 QScrollArea *g_queue_scroll = nullptr;
 QPushButton *g_clock_btn = nullptr;
 QTimer *g_tick_timer = nullptr;
+QFileSystemWatcher *g_file_watcher = nullptr;
+QElapsedTimer g_write_cooldown;
 scoreboard_log_fn g_log_fn = nullptr;
 
 QVector<process_job *> g_jobs;
 int g_next_job_id = 1;
-QHash<int, cli_action_binding> g_cli_actions;
 QString g_environment_file;
 QPushButton *g_highlights_btn = nullptr;
-QProcess *g_highlights_process = nullptr;
-bool g_auto_highlights = false;
+QPushButton *g_period_adv_btn = nullptr;
+QCheckBox *g_game_finished = nullptr;
 
-static const int kNumHotkeys = 23;
+static const int kNumHotkeys = 31;
 
 static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_clock_startstop",  "sb_clock_reset",
@@ -143,6 +136,10 @@ static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_home_pen_clear2",  "sb_away_pen_add",
 	"sb_away_pen_clear1",  "sb_away_pen_clear2",
 	"sb_generate_highlights",
+	"sb_home_foul_plus",   "sb_home_foul_minus",
+	"sb_away_foul_plus",   "sb_away_foul_minus",
+	"sb_home_foul2_plus",  "sb_home_foul2_minus",
+	"sb_away_foul2_plus",  "sb_away_foul2_minus",
 };
 
 obs_hotkey_id g_hotkey_ids[kNumHotkeys];
@@ -162,64 +159,6 @@ QString expand_user_path(const QString &path)
 	if (path == "~")
 		return QDir::homePath();
 	return path;
-}
-
-QString event_name(scoreboard_event_type event)
-{
-	switch (event) {
-	case SB_EVENT_HOME_GOAL:
-		return "HOME_GOAL";
-	case SB_EVENT_AWAY_GOAL:
-		return "AWAY_GOAL";
-	case SB_EVENT_PERIOD_CHANGE:
-		return "PERIOD_CHANGE";
-	case SB_EVENT_GAME_START:
-		return "GAME_START";
-	case SB_EVENT_GAME_END:
-		return "GAME_END";
-	default:
-		return "NONE";
-	}
-}
-
-scoreboard_event_type event_from_name(const QString &name)
-{
-	const QString n = name.trimmed().toUpper();
-	if (n == "HOME_GOAL")
-		return SB_EVENT_HOME_GOAL;
-	if (n == "AWAY_GOAL")
-		return SB_EVENT_AWAY_GOAL;
-	if (n == "PERIOD_CHANGE")
-		return SB_EVENT_PERIOD_CHANGE;
-	if (n == "GAME_START")
-		return SB_EVENT_GAME_START;
-	if (n == "GAME_END")
-		return SB_EVENT_GAME_END;
-	return SB_EVENT_NONE;
-}
-
-QString expand_scoreboard_token(const QString &arg, const QString &event_str)
-{
-	char buf[64];
-	QString expanded = arg;
-	expanded.replace("{event}", event_str);
-	expanded.replace("{home_name}",
-			 QString::fromUtf8(scoreboard_get_home_name()));
-	expanded.replace("{away_name}",
-			 QString::fromUtf8(scoreboard_get_away_name()));
-	snprintf(buf, sizeof(buf), "%d", scoreboard_get_home_score());
-	expanded.replace("{home_score}", QString::fromUtf8(buf));
-	snprintf(buf, sizeof(buf), "%d", scoreboard_get_away_score());
-	expanded.replace("{away_score}", QString::fromUtf8(buf));
-	scoreboard_format_period(buf, sizeof(buf));
-	expanded.replace("{period}", QString::fromUtf8(buf));
-	scoreboard_clock_format(buf, sizeof(buf));
-	expanded.replace("{clock}", QString::fromUtf8(buf));
-	snprintf(buf, sizeof(buf), "%d", scoreboard_get_home_shots());
-	expanded.replace("{home_shots}", QString::fromUtf8(buf));
-	snprintf(buf, sizeof(buf), "%d", scoreboard_get_away_shots());
-	expanded.replace("{away_shots}", QString::fromUtf8(buf));
-	return expanded;
 }
 
 QString strip_shell_quotes(QString value)
@@ -288,130 +227,36 @@ QString merge_path_value(const QString &current_path,
 	return parts.join(sep);
 }
 
-QStringList json_string_list(const QJsonValue &value)
+/* ---- Safety helpers ---- */
+
+bool clock_at_segment_boundary()
 {
-	QStringList out;
-	if (!value.isArray())
-		return out;
-	const QJsonArray arr = value.toArray();
-	for (const QJsonValue &item : arr) {
-		if (item.isString())
-			out << item.toString();
-	}
-	return out;
+	int tenths = scoreboard_clock_get_tenths();
+	int full = scoreboard_get_period_length() * 10;
+	return tenths == 0 || tenths == full;
 }
 
-QJsonObject read_json_object(const QString &path, bool *ok_out,
-			     QString *error_out)
+bool confirm_mid_period_action(QWidget *parent, const QString &action)
 {
-	QFile file(path);
-	if (!file.exists()) {
-		if (error_out)
-			*error_out = QString("File not found: ") + path;
-		if (ok_out)
-			*ok_out = false;
-		return QJsonObject();
-	}
-	if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		if (error_out)
-			*error_out = QString("Cannot open: ") + path;
-		if (ok_out)
-			*ok_out = false;
-		return QJsonObject();
-	}
-	const QByteArray bytes = file.readAll();
-	QJsonParseError parse_error;
-	const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parse_error);
-	if (parse_error.error != QJsonParseError::NoError || !doc.isObject()) {
-		if (error_out)
-			*error_out = QString("Invalid JSON in: ") + path;
-		if (ok_out)
-			*ok_out = false;
-		return QJsonObject();
-	}
-	if (ok_out)
-		*ok_out = true;
-	return doc.object();
-}
-
-QJsonValue merge_json_values(const QJsonValue &base_value,
-			     const QJsonValue &override_value)
-{
-	if (override_value.isUndefined() || override_value.isNull())
-		return base_value;
-	if (base_value.isObject() && override_value.isObject()) {
-		QJsonObject merged = base_value.toObject();
-		const QJsonObject override_obj = override_value.toObject();
-		for (auto it = override_obj.begin(); it != override_obj.end();
-		     ++it)
-			merged.insert(it.key(), merge_json_values(
-							 merged.value(it.key()),
-							 it.value()));
-		return merged;
-	}
-	return override_value;
-}
-
-void load_cli_actions_from_config(const QJsonObject &merged_obj)
-{
-	g_cli_actions.clear();
-	const QJsonObject infrastructure_obj =
-		merged_obj.value("infrastructure").toObject();
-	const QJsonObject obs_obj =
-		infrastructure_obj.value("obs").toObject();
-	QJsonObject actions_obj = obs_obj.value("event_actions").toObject();
-	if (actions_obj.isEmpty())
-		actions_obj = obs_obj.value("actions").toObject();
-	if (actions_obj.isEmpty()) {
-		const QJsonObject plugin_obj =
-			merged_obj.value("obs_plugin").toObject();
-		actions_obj = plugin_obj.value("actions").toObject();
-	}
-
-	for (auto it = actions_obj.begin(); it != actions_obj.end(); ++it) {
-		const scoreboard_event_type event = event_from_name(it.key());
-		if (event == SB_EVENT_NONE)
-			continue;
-		cli_action_binding action;
-		const QJsonValue value = it.value();
-		if (value.isArray()) {
-			const QStringList argv = json_string_list(value);
-			if (argv.isEmpty())
-				continue;
-			action.command = argv.first();
-			action.subcommand.clear();
-			int arg_start = 1;
-			if (argv.size() > 1) {
-				const QString second = argv[1].trimmed();
-				if (!second.isEmpty() &&
-				    !second.startsWith("-")) {
-					action.subcommand = second;
-					arg_start = 2;
-				}
-			}
-			for (int i = arg_start; i < argv.size(); i++)
-				action.args_template << argv[i];
-			g_cli_actions.insert(static_cast<int>(event), action);
-			continue;
-		}
-		if (!value.isObject())
-			continue;
-		const QJsonObject action_obj = value.toObject();
-		const QString configured_command =
-			action_obj.value("command").toString().trimmed();
-		if (!configured_command.isEmpty())
-			action.command = configured_command;
-		if (action_obj.contains("subcommand"))
-			action.subcommand =
-				action_obj.value("subcommand")
-					.toString()
-					.trimmed();
-		action.args_template =
-			json_string_list(action_obj.value("args"));
-		action.extra_args =
-			json_string_list(action_obj.value("extra_args"));
-		g_cli_actions.insert(static_cast<int>(event), action);
-	}
+	if (clock_at_segment_boundary())
+		return true;
+	QDialog dialog(parent);
+	dialog.setWindowTitle("Confirm");
+	QVBoxLayout *layout = new QVBoxLayout(&dialog);
+	char buf[64];
+	scoreboard_clock_format(buf, sizeof(buf));
+	layout->addWidget(new QLabel(
+		"The clock is at " + QString::fromUtf8(buf) +
+			". Are you sure you want to " + action + "?",
+		&dialog));
+	QDialogButtonBox *buttons = new QDialogButtonBox(
+		QDialogButtonBox::Yes | QDialogButtonBox::No, &dialog);
+	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+			 &QDialog::accept);
+	QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+			 &QDialog::reject);
+	layout->addWidget(buttons);
+	return dialog.exec() == QDialog::Accepted;
 }
 
 /* ---- Process queue ---- */
@@ -667,29 +512,35 @@ void clear_completed_jobs()
 	refresh_queue_placeholder();
 }
 
-void fire_cli_event(scoreboard_event_type event)
+void run_reeln_segment_command()
 {
-	if (!g_cli_actions.contains(static_cast<int>(event)))
-		return;
 	const QString executable =
 		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
 	if (executable.isEmpty())
 		return;
-	const cli_action_binding action =
-		g_cli_actions.value(static_cast<int>(event));
-	const QString event_str = event_name(event);
-	QStringList args;
-	args << action.command;
-	if (!action.subcommand.isEmpty())
-		args << action.subcommand;
-	if (!action.args_template.isEmpty()) {
-		for (const QString &arg : action.args_template)
-			args << expand_scoreboard_token(arg, event_str);
+	const QString extra =
+		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
+	QStringList extra_parts;
+	if (!extra.isEmpty())
+		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+
+	bool game_finished =
+		g_game_finished && g_game_finished->isChecked();
+	if (game_finished) {
+		QStringList args;
+		args << "game" << "highlights" << extra_parts;
+		add_job_row("Game Highlights", args);
 	} else {
-		args << "--event" << event_str;
+		char period_buf[64];
+		scoreboard_format_period(period_buf, sizeof(period_buf));
+		QString period_text = QString::fromUtf8(period_buf);
+		QStringList args;
+		args << "game" << "segment" << period_text << extra_parts;
+		add_job_row("Segment " + period_text, args);
 	}
-	add_job_row(event_str, args);
 }
+
+void write_files_now();
 
 /* ---- UI update ---- */
 
@@ -701,9 +552,13 @@ void update_all_labels()
 		g_clock_label->setText(QString::fromUtf8(buf));
 	}
 	if (g_clock_btn) {
-		bool running = scoreboard_clock_is_running();
-		g_clock_btn->setText(running ? "Stop" : "Start");
-		if (running) {
+		bool clock_running = scoreboard_clock_is_running();
+		g_clock_btn->setText(clock_running ? "Stop" : "Start");
+		if (g_highlights_btn)
+			g_highlights_btn->setEnabled(!clock_running);
+		if (g_period_adv_btn)
+			g_period_adv_btn->setEnabled(!clock_running);
+		if (clock_running) {
 			QPalette p = g_clock_btn->palette();
 			QColor base = p.color(QPalette::Button);
 			QColor red = QColor::fromHslF(0.0, 0.7,
@@ -717,11 +572,53 @@ void update_all_labels()
 			g_clock_btn->setStyleSheet("");
 		}
 	}
+	if (g_highlights_btn && g_highlights_btn->isVisible()) {
+		if (g_game_finished && g_game_finished->isChecked())
+			g_highlights_btn->setText(
+				"Generate Game Highlights");
+		else
+			g_highlights_btn->setText(
+				"Generate " +
+				QString::fromUtf8(
+					scoreboard_get_segment_name()) +
+				" Highlights");
+	}
 	if (g_period_label) {
 		scoreboard_format_period(buf, sizeof(buf));
-		g_period_label->setText(QString("Period: ") +
+		QString seg = QString::fromUtf8(scoreboard_get_segment_name());
+		g_period_label->setText(seg + ": " +
 					QString::fromUtf8(buf));
 	}
+	if (g_shots_row_widget)
+		g_shots_row_widget->setVisible(scoreboard_get_has_shots());
+	if (g_fouls_row_widget)
+		g_fouls_row_widget->setVisible(scoreboard_get_has_fouls());
+	if (g_fouls_center_label)
+		g_fouls_center_label->setText(
+			QString::fromUtf8(scoreboard_get_foul_label()));
+	if (g_home_fouls_label)
+		g_home_fouls_label->setText(
+			QString::number(scoreboard_get_home_fouls()));
+	if (g_away_fouls_label)
+		g_away_fouls_label->setText(
+			QString::number(scoreboard_get_away_fouls()));
+	if (g_fouls2_row_widget)
+		g_fouls2_row_widget->setVisible(scoreboard_get_has_fouls2());
+	if (g_fouls2_center_label)
+		g_fouls2_center_label->setText(
+			QString::fromUtf8(scoreboard_get_foul_label2()));
+	if (g_home_fouls2_label)
+		g_home_fouls2_label->setText(
+			QString::number(scoreboard_get_home_fouls2()));
+	if (g_away_fouls2_label)
+		g_away_fouls2_label->setText(
+			QString::number(scoreboard_get_away_fouls2()));
+	if (g_penalty_section_widget)
+		g_penalty_section_widget->setVisible(
+			scoreboard_get_has_penalties());
+	if (g_penalty_separator)
+		g_penalty_separator->setVisible(
+			scoreboard_get_has_penalties());
 	if (g_home_name_edit && !g_home_name_edit->hasFocus())
 		g_home_name_edit->setText(
 			QString::fromUtf8(scoreboard_get_home_name()));
@@ -829,7 +726,7 @@ void update_all_labels()
 					else
 						scoreboard_away_penalty_clear(
 							captured_slot);
-					scoreboard_write_all_files();
+					write_files_now();
 					update_all_labels();
 				});
 
@@ -844,10 +741,67 @@ void update_all_labels()
 	update_pen_rows(g_away_pen_layout, g_away_pen_rows, false);
 }
 
+const char *kWatchedFiles[] = {
+	"home_name.txt",	  "away_name.txt",
+	"home_score.txt",	  "away_score.txt",
+	"clock.txt",		  "period.txt",
+	"home_shots.txt",	  "away_shots.txt",
+	"home_penalty_numbers.txt", "home_penalty_times.txt",
+	"away_penalty_numbers.txt", "away_penalty_times.txt",
+	"home_fouls.txt",	    "away_fouls.txt",
+	"home_fouls2.txt",	    "away_fouls2.txt",
+	"sport.txt",
+};
+const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
+const qint64 kWriteCooldownMs = 500;
+
+void rebuild_file_watcher()
+{
+	if (!g_file_watcher)
+		return;
+
+	QStringList old_files = g_file_watcher->files();
+	if (!old_files.isEmpty())
+		g_file_watcher->removePaths(old_files);
+
+	const char *dir = scoreboard_get_output_directory();
+	if (dir[0] == '\0')
+		return;
+
+	QString base = QString::fromUtf8(dir);
+	for (int i = 0; i < kWatchedFileCount; i++) {
+		QString path = base + "/" + kWatchedFiles[i];
+		if (QFile::exists(path))
+			g_file_watcher->addPath(path);
+	}
+}
+
+void on_file_changed(const QString &path)
+{
+	if (g_write_cooldown.isValid() &&
+	    g_write_cooldown.elapsed() < kWriteCooldownMs)
+		return;
+
+	scoreboard_read_all_files();
+	update_all_labels();
+
+	/* Re-add the path — some platforms remove it after a change event */
+	if (g_file_watcher && QFile::exists(path) &&
+	    !g_file_watcher->files().contains(path))
+		g_file_watcher->addPath(path);
+}
+
+void write_files_now()
+{
+	scoreboard_write_all_files();
+	g_write_cooldown.restart();
+}
+
 void on_tick()
 {
 	scoreboard_clock_tick(1);
-	scoreboard_write_all_files();
+	if (scoreboard_is_dirty())
+		write_files_now();
 	update_all_labels();
 }
 
@@ -858,35 +812,25 @@ void load_profile_paths()
 	config_t *profile_cfg = obs_frontend_get_profile_config();
 	const char *output_dir = nullptr;
 	const char *cli_exe = nullptr;
-	const char *main_cfg = nullptr;
-	const char *override_cfg = nullptr;
+	const char *cli_args = nullptr;
 	const char *env_file = nullptr;
-	const char *auto_hl = nullptr;
 
 	if (profile_cfg != nullptr) {
 		output_dir = config_get_string(profile_cfg, kConfigSection,
 					       kOutputDirKey);
 		cli_exe = config_get_string(profile_cfg, kConfigSection,
 					    kCliExecutableKey);
-		main_cfg = config_get_string(profile_cfg, kConfigSection,
-					     kMainConfigKey);
-		override_cfg = config_get_string(profile_cfg, kConfigSection,
-						 kOverrideConfigKey);
+		cli_args = config_get_string(profile_cfg, kConfigSection,
+					     kCliExtraArgsKey);
 		env_file = config_get_string(profile_cfg, kConfigSection,
 					     kEnvFileKey);
-		auto_hl = config_get_string(profile_cfg, kConfigSection,
-					    kAutoHighlightsKey);
 	}
 
 	scoreboard_set_output_directory(output_dir);
 	scoreboard_set_cli_executable(cli_exe);
-	scoreboard_set_main_config_path(main_cfg);
-	scoreboard_set_override_config_path(override_cfg);
+	scoreboard_set_cli_extra_args(cli_args);
 	g_environment_file =
 		env_file ? QString::fromUtf8(env_file).trimmed() : QString();
-	g_auto_highlights =
-		auto_hl ? QString::fromUtf8(auto_hl).trimmed() == "true"
-			: false;
 }
 
 void save_profile_paths()
@@ -898,112 +842,22 @@ void save_profile_paths()
 			  scoreboard_get_output_directory());
 	config_set_string(profile_cfg, kConfigSection, kCliExecutableKey,
 			  scoreboard_get_cli_executable());
-	config_set_string(profile_cfg, kConfigSection, kMainConfigKey,
-			  scoreboard_get_main_config_path());
-	config_set_string(profile_cfg, kConfigSection, kOverrideConfigKey,
-			  scoreboard_get_override_config_path());
+	config_set_string(profile_cfg, kConfigSection, kCliExtraArgsKey,
+			  scoreboard_get_cli_extra_args());
 	config_set_string(profile_cfg, kConfigSection, kEnvFileKey,
 			  g_environment_file.toUtf8().constData());
-	config_set_string(profile_cfg, kConfigSection, kAutoHighlightsKey,
-			  g_auto_highlights ? "true" : "false");
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
-void load_cli_config()
-{
-	const QString main_path = expand_user_path(
-		QString::fromUtf8(scoreboard_get_main_config_path()));
-	const QString override_path = expand_user_path(
-		QString::fromUtf8(scoreboard_get_override_config_path()));
-	bool main_ok = false;
-	bool override_ok = false;
-	const QJsonObject main_obj =
-		read_json_object(main_path, &main_ok, nullptr);
-	const QJsonObject override_obj =
-		read_json_object(override_path, &override_ok, nullptr);
-	QJsonObject merged_obj;
-	if (main_ok || override_ok)
-		merged_obj =
-			merge_json_values(main_obj, override_obj).toObject();
-	load_cli_actions_from_config(merged_obj);
-}
-
-/* ---- Highlights generation ---- */
-
 void update_highlights_button_visibility()
 {
-	if (!g_highlights_btn)
-		return;
 	const QString cli_path =
 		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
-	g_highlights_btn->setVisible(!cli_path.isEmpty());
-}
-
-void finish_highlights_generation()
-{
-	if (g_highlights_process) {
-		g_highlights_process->deleteLater();
-		g_highlights_process = nullptr;
-	}
-	if (g_highlights_btn) {
-		g_highlights_btn->setText("Generate Period Highlights");
-		g_highlights_btn->setStyleSheet("");
-		g_highlights_btn->setEnabled(true);
-	}
-}
-
-void start_highlights_generation()
-{
-	const QString executable =
-		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
-	if (executable.isEmpty())
-		return;
-	if (g_highlights_process)
-		return;
-
-	g_highlights_process = new QProcess(g_dock_widget);
-	g_highlights_process->setProgram(executable);
-	g_highlights_process->setArguments({"publish", "highlights"});
-
-	QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-	const QString env_file_path = expand_user_path(g_environment_file);
-	if (!env_file_path.trimmed().isEmpty()) {
-		const QMap<QString, QString> overrides =
-			parse_env_file(env_file_path);
-		for (auto it = overrides.begin(); it != overrides.end(); ++it) {
-			if (it.key() == "PATH") {
-				env.insert("PATH",
-					   merge_path_value(env.value("PATH"),
-							    it.value()));
-			} else {
-				env.insert(it.key(), it.value());
-			}
-		}
-	}
-	g_highlights_process->setProcessEnvironment(env);
-
-	QObject::connect(
-		g_highlights_process, &QProcess::errorOccurred,
-		[](QProcess::ProcessError) { finish_highlights_generation(); });
-	QObject::connect(
-		g_highlights_process,
-		qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-		[](int, QProcess::ExitStatus) {
-			finish_highlights_generation();
-		});
-
-	if (g_highlights_btn) {
-		g_highlights_btn->setText("Generating...");
-		g_highlights_btn->setEnabled(false);
-		QPalette p = g_highlights_btn->palette();
-		QColor base = p.color(QPalette::Button);
-		QColor red = QColor::fromHslF(0.0, 0.7, base.lightnessF());
-		g_highlights_btn->setStyleSheet(
-			"color: " + red.name() + "; font-weight: bold;");
-	}
-
-	g_highlights_process->start();
-	log_info("[streamn-obs-scoreboard] highlights generation started");
+	const bool show = !cli_path.isEmpty();
+	if (g_highlights_btn)
+		g_highlights_btn->setVisible(show);
+	if (g_game_finished)
+		g_game_finished->setVisible(show);
 }
 
 /* ---- Dialogs ---- */
@@ -1097,6 +951,7 @@ void open_configure_dialog(QWidget *parent)
 		scoreboard_set_output_directory(
 			out_input->text().trimmed().toUtf8().constData());
 		save_profile_paths();
+		rebuild_file_watcher();
 		update_all_labels();
 	}
 }
@@ -1107,8 +962,23 @@ void open_clock_settings_dialog(QWidget *parent)
 	dialog.setWindowTitle("Game Settings");
 	QVBoxLayout *layout = new QVBoxLayout(&dialog);
 
+	/* Sport selector */
+	QHBoxLayout *sport_row = new QHBoxLayout();
+	sport_row->addWidget(new QLabel("Sport:", &dialog));
+	QComboBox *sport_combo = new QComboBox(&dialog);
+	for (int i = 0; i < SCOREBOARD_SPORT_COUNT; i++) {
+		QString name = QString::fromUtf8(
+			scoreboard_sport_name((enum scoreboard_sport)i));
+		name[0] = name[0].toUpper();
+		sport_combo->addItem(name, i);
+	}
+	sport_combo->setCurrentIndex((int)scoreboard_get_sport());
+	sport_row->addWidget(sport_combo, 1);
+	layout->addLayout(sport_row);
+
+	QLabel *len_label = new QLabel("Segment length (minutes):", &dialog);
 	QHBoxLayout *len_row = new QHBoxLayout();
-	len_row->addWidget(new QLabel("Period length (minutes):", &dialog));
+	len_row->addWidget(len_label);
 	QSpinBox *len_spin = new QSpinBox(&dialog);
 	len_spin->setRange(1, 60);
 	len_spin->setValue(scoreboard_get_period_length() / 60);
@@ -1138,14 +1008,53 @@ void open_clock_settings_dialog(QWidget *parent)
 		down_btn->setChecked(false);
 	});
 
+	QLabel *pen_dur_label =
+		new QLabel("Default penalty (seconds):", &dialog);
 	QHBoxLayout *pen_dur_row = new QHBoxLayout();
-	pen_dur_row->addWidget(
-		new QLabel("Default penalty (seconds):", &dialog));
+	pen_dur_row->addWidget(pen_dur_label);
 	QSpinBox *pen_dur_spin = new QSpinBox(&dialog);
 	pen_dur_spin->setRange(1, 600);
 	pen_dur_spin->setValue(scoreboard_get_default_penalty_duration());
 	pen_dur_row->addWidget(pen_dur_spin);
 	layout->addLayout(pen_dur_row);
+
+	/* Preset duration/direction/features per sport (mirrors core table) */
+	struct sport_ui_info {
+		int duration_min;
+		bool count_down;
+		bool has_penalties;
+		bool has_fouls;
+	};
+	static const sport_ui_info k_sport_ui[SCOREBOARD_SPORT_COUNT] = {
+		{15, true, true, false},   /* hockey */
+		{8, true, false, true},    /* basketball */
+		{45, false, false, true},  /* soccer */
+		{30, true, false, true},   /* football */
+		{12, true, true, false},   /* lacrosse */
+		{40, false, true, false},  /* rugby */
+		{0, false, false, false},  /* generic */
+	};
+
+	/* Update dialog fields when sport changes */
+	QObject::connect(
+		sport_combo, qOverload<int>(&QComboBox::currentIndexChanged),
+		[len_spin, down_btn, up_btn, pen_dur_spin,
+		 pen_dur_label](int index) {
+			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
+				return;
+			const sport_ui_info &info = k_sport_ui[index];
+			if (info.duration_min > 0)
+				len_spin->setValue(info.duration_min);
+			if (info.count_down) {
+				down_btn->setChecked(true);
+				up_btn->setChecked(false);
+			} else {
+				up_btn->setChecked(true);
+				down_btn->setChecked(false);
+			}
+			pen_dur_label->setVisible(info.has_penalties);
+			pen_dur_spin->setVisible(info.has_penalties);
+		});
 
 	QFrame *sep = new QFrame(&dialog);
 	sep->setFrameShape(QFrame::HLine);
@@ -1153,74 +1062,41 @@ void open_clock_settings_dialog(QWidget *parent)
 	layout->addWidget(sep);
 
 	QHBoxLayout *cli_row = new QHBoxLayout();
-	cli_row->addWidget(new QLabel("Streamn CLI path:", &dialog));
+	cli_row->addWidget(new QLabel("reeln-cli path:", &dialog));
 	QLineEdit *cli_input = new QLineEdit(&dialog);
 	cli_input->setText(
 		QString::fromUtf8(scoreboard_get_cli_executable()));
-	cli_input->setPlaceholderText("/path/to/streamn-cli");
+	cli_input->setPlaceholderText("/path/to/reeln");
 	QPushButton *cli_browse = new QPushButton("Browse", &dialog);
 	cli_row->addWidget(cli_input, 1);
 	cli_row->addWidget(cli_browse);
 	layout->addLayout(cli_row);
+
+	QLabel *cli_link = new QLabel(
+		"<a href=\"https://github.com/StreamnDad/reeln-cli\">github.com/StreamnDad/reeln-cli</a>",
+		&dialog);
+	cli_link->setOpenExternalLinks(true);
+	layout->addWidget(cli_link);
 
 	QObject::connect(cli_browse, &QPushButton::clicked,
 			 [&dialog, cli_input]() {
 				 const QString path =
 					 QFileDialog::getOpenFileName(
 						 &dialog,
-						 "Select Streamn CLI",
+						 "Select reeln-cli",
 						 cli_input->text());
 				 if (!path.isEmpty())
 					 cli_input->setText(path);
 			 });
 
-	QHBoxLayout *main_cfg_row = new QHBoxLayout();
-	main_cfg_row->addWidget(new QLabel("Main config:", &dialog));
-	QLineEdit *main_cfg_input = new QLineEdit(&dialog);
-	main_cfg_input->setText(
-		QString::fromUtf8(scoreboard_get_main_config_path()));
-	main_cfg_input->setPlaceholderText("/path/to/config.json");
-	QPushButton *main_cfg_browse = new QPushButton("Browse", &dialog);
-	main_cfg_row->addWidget(main_cfg_input, 1);
-	main_cfg_row->addWidget(main_cfg_browse);
-	layout->addLayout(main_cfg_row);
-
-	QObject::connect(main_cfg_browse, &QPushButton::clicked,
-			 [&dialog, main_cfg_input]() {
-				 const QString path =
-					 QFileDialog::getOpenFileName(
-						 &dialog,
-						 "Select Main Config",
-						 main_cfg_input->text(),
-						 "JSON Files (*.json);;All Files (*)");
-				 if (!path.isEmpty())
-					 main_cfg_input->setText(path);
-			 });
-
-	QHBoxLayout *override_cfg_row = new QHBoxLayout();
-	override_cfg_row->addWidget(
-		new QLabel("Override config:", &dialog));
-	QLineEdit *override_cfg_input = new QLineEdit(&dialog);
-	override_cfg_input->setText(
-		QString::fromUtf8(scoreboard_get_override_config_path()));
-	override_cfg_input->setPlaceholderText("/path/to/override.json");
-	QPushButton *override_cfg_browse =
-		new QPushButton("Browse", &dialog);
-	override_cfg_row->addWidget(override_cfg_input, 1);
-	override_cfg_row->addWidget(override_cfg_browse);
-	layout->addLayout(override_cfg_row);
-
-	QObject::connect(override_cfg_browse, &QPushButton::clicked,
-			 [&dialog, override_cfg_input]() {
-				 const QString path =
-					 QFileDialog::getOpenFileName(
-						 &dialog,
-						 "Select Override Config",
-						 override_cfg_input->text(),
-						 "JSON Files (*.json);;All Files (*)");
-				 if (!path.isEmpty())
-					 override_cfg_input->setText(path);
-			 });
+	QHBoxLayout *cli_args_row = new QHBoxLayout();
+	cli_args_row->addWidget(new QLabel("CLI arguments:", &dialog));
+	QLineEdit *cli_args_input = new QLineEdit(&dialog);
+	cli_args_input->setText(
+		QString::fromUtf8(scoreboard_get_cli_extra_args()));
+	cli_args_input->setPlaceholderText("--profile my-profile");
+	cli_args_row->addWidget(cli_args_input, 1);
+	layout->addLayout(cli_args_row);
 
 	QHBoxLayout *env_file_row = new QHBoxLayout();
 	env_file_row->addWidget(
@@ -1245,13 +1121,6 @@ void open_clock_settings_dialog(QWidget *parent)
 					 env_file_input->setText(path);
 			 });
 
-	QCheckBox *auto_hl_check =
-		new QCheckBox("Auto-generate period highlights on period "
-			      "change",
-			      &dialog);
-	auto_hl_check->setChecked(g_auto_highlights);
-	layout->addWidget(auto_hl_check);
-
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1261,6 +1130,11 @@ void open_clock_settings_dialog(QWidget *parent)
 	layout->addWidget(buttons);
 
 	if (dialog.exec() == QDialog::Accepted) {
+		int sport_idx = sport_combo->currentIndex();
+		if (sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
+		    sport_idx != (int)scoreboard_get_sport())
+			scoreboard_set_sport(
+				(enum scoreboard_sport)sport_idx);
 		scoreboard_set_period_length(len_spin->value() * 60);
 		scoreboard_set_clock_direction(
 			down_btn->isChecked() ? SCOREBOARD_CLOCK_COUNT_DOWN
@@ -1269,17 +1143,10 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->value());
 		scoreboard_set_cli_executable(
 			cli_input->text().trimmed().toUtf8().constData());
-		scoreboard_set_main_config_path(
-			main_cfg_input->text().trimmed().toUtf8().constData());
-		scoreboard_set_override_config_path(
-			override_cfg_input->text()
-				.trimmed()
-				.toUtf8()
-				.constData());
+		scoreboard_set_cli_extra_args(
+			cli_args_input->text().trimmed().toUtf8().constData());
 		g_environment_file = env_file_input->text().trimmed();
-		g_auto_highlights = auto_hl_check->isChecked();
 		save_profile_paths();
-		load_cli_config();
 		scoreboard_clock_reset();
 		update_all_labels();
 		update_highlights_button_visibility();
@@ -1396,10 +1263,8 @@ void hk_clock_minus1sec(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
-		return;
-	scoreboard_increment_home_score();
-	fire_cli_event(SB_EVENT_HOME_GOAL);
+	if (pressed)
+		scoreboard_increment_home_score();
 }
 
 void hk_home_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1422,10 +1287,8 @@ void hk_home_shot_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_away_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
-		return;
-	scoreboard_increment_away_score();
-	fire_cli_event(SB_EVENT_AWAY_GOAL);
+	if (pressed)
+		scoreboard_increment_away_score();
 }
 
 void hk_away_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1450,18 +1313,16 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (!pressed)
 		return;
+	if (scoreboard_clock_is_running())
+		return;
 	scoreboard_period_advance();
-	fire_cli_event(SB_EVENT_PERIOD_CHANGE);
-	if (g_auto_highlights)
-		start_highlights_generation();
+	run_reeln_segment_command();
 }
 
 void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
-		return;
-	scoreboard_period_rewind();
-	fire_cli_event(SB_EVENT_PERIOD_CHANGE);
+	if (pressed)
+		scoreboard_period_rewind();
 }
 
 void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1505,8 +1366,59 @@ void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
 			     bool pressed)
 {
+	if (!pressed)
+		return;
+	if (scoreboard_clock_is_running())
+		return;
+	run_reeln_segment_command();
+}
+
+void hk_home_foul_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
 	if (pressed)
-		start_highlights_generation();
+		scoreboard_increment_home_fouls();
+}
+
+void hk_home_foul_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_home_fouls();
+}
+
+void hk_away_foul_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_increment_away_fouls();
+}
+
+void hk_away_foul_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_away_fouls();
+}
+
+void hk_home_foul2_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_increment_home_fouls2();
+}
+
+void hk_home_foul2_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_home_fouls2();
+}
+
+void hk_away_foul2_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_increment_away_fouls2();
+}
+
+void hk_away_foul2_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_away_fouls2();
 }
 
 void save_hotkeys(obs_data_t *save_data, bool saving, void *private_data)
@@ -1627,6 +1539,30 @@ void register_hotkeys()
 		"sb_generate_highlights",
 		"Streamn: Generate Period Highlights",
 		hk_generate_highlights, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_foul_plus", "Streamn: Home Foul +",
+		hk_home_foul_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_foul_minus", "Streamn: Home Foul -",
+		hk_home_foul_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_foul_plus", "Streamn: Away Foul +",
+		hk_away_foul_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_foul_minus", "Streamn: Away Foul -",
+		hk_away_foul_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_foul2_plus", "Streamn: Home Foul2 +",
+		hk_home_foul2_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_foul2_minus", "Streamn: Home Foul2 -",
+		hk_home_foul2_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_foul2_plus", "Streamn: Away Foul2 +",
+		hk_away_foul2_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_foul2_minus", "Streamn: Away Foul2 -",
+		hk_away_foul2_minus, nullptr);
 
 	/* Register save/load callbacks to persist hotkey bindings */
 	obs_frontend_add_save_callback(save_hotkeys, nullptr);
@@ -1638,7 +1574,7 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 	if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGED ||
 	    event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
 		load_profile_paths();
-		load_cli_config();
+		rebuild_file_watcher();
 		update_all_labels();
 		update_highlights_button_visibility();
 	}
@@ -1756,15 +1692,17 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QHBoxLayout *period_row = new QHBoxLayout();
 	period_row->setContentsMargins(0, 0, 0, 0);
 	period_row->setSpacing(4);
-	g_period_label = new QLabel("Period: 1", widget);
+	g_period_label = new QLabel(
+		QString::fromUtf8(scoreboard_get_segment_name()) + ": 1",
+		widget);
 	g_period_label->setAlignment(Qt::AlignCenter);
 	QPushButton *period_rew_btn = new QPushButton("<", widget);
-	QPushButton *period_adv_btn = new QPushButton(">", widget);
+	g_period_adv_btn = new QPushButton(">", widget);
 	period_rew_btn->setFixedWidth(28);
-	period_adv_btn->setFixedWidth(28);
+	g_period_adv_btn->setFixedWidth(28);
 	period_row->addWidget(period_rew_btn);
 	period_row->addWidget(g_period_label, 1);
-	period_row->addWidget(period_adv_btn);
+	period_row->addWidget(g_period_adv_btn);
 	root->addLayout(period_row);
 
 	/* ---- Separator ---- */
@@ -1842,8 +1780,9 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	score_row->addStretch(1);
 	root->addLayout(score_row);
 
-	/* Shots row: [-] 0 [+] | [-] 0 [+] — centered */
-	QHBoxLayout *shots_row = new QHBoxLayout();
+	/* Shots row: [-] 0 [+] | [-] 0 [+] — centered, wrapped for visibility toggle */
+	g_shots_row_widget = new QWidget(widget);
+	QHBoxLayout *shots_row = new QHBoxLayout(g_shots_row_widget);
 	shots_row->setContentsMargins(0, 0, 0, 0);
 	shots_row->setSpacing(2);
 
@@ -1878,11 +1817,101 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	shots_row->addWidget(g_away_shots_label);
 	shots_row->addWidget(away_shot_plus);
 	shots_row->addStretch(1);
-	root->addLayout(shots_row);
+	root->addWidget(g_shots_row_widget);
 
-	add_separator();
+	/* Fouls row: [-] 0 [+] | Label | [-] 0 [+] — wrapped for visibility toggle */
+	g_fouls_row_widget = new QWidget(widget);
+	QHBoxLayout *fouls_row = new QHBoxLayout(g_fouls_row_widget);
+	fouls_row->setContentsMargins(0, 0, 0, 0);
+	fouls_row->setSpacing(2);
 
-	/* ---- SECTION: Penalties (dynamic) ---- */
+	QPushButton *home_foul_minus = new QPushButton("-", widget);
+	QPushButton *home_foul_plus = new QPushButton("+", widget);
+	home_foul_minus->setFixedWidth(28);
+	home_foul_plus->setFixedWidth(28);
+	g_home_fouls_label = new QLabel("0", widget);
+	g_home_fouls_label->setAlignment(Qt::AlignCenter);
+	g_home_fouls_label->setFixedWidth(32);
+	fouls_row->addStretch(1);
+	fouls_row->addWidget(home_foul_minus);
+	fouls_row->addWidget(g_home_fouls_label);
+	fouls_row->addWidget(home_foul_plus);
+
+	g_fouls_center_label = new QLabel(
+		QString::fromUtf8(scoreboard_get_foul_label()), widget);
+	g_fouls_center_label->setAlignment(Qt::AlignCenter);
+	g_fouls_center_label->setStyleSheet(kMutedStyle);
+	g_fouls_center_label->setFixedWidth(36);
+	fouls_row->addSpacing(4);
+	fouls_row->addWidget(g_fouls_center_label);
+	fouls_row->addSpacing(4);
+
+	QPushButton *away_foul_minus = new QPushButton("-", widget);
+	QPushButton *away_foul_plus = new QPushButton("+", widget);
+	away_foul_minus->setFixedWidth(28);
+	away_foul_plus->setFixedWidth(28);
+	g_away_fouls_label = new QLabel("0", widget);
+	g_away_fouls_label->setAlignment(Qt::AlignCenter);
+	g_away_fouls_label->setFixedWidth(32);
+	fouls_row->addWidget(away_foul_minus);
+	fouls_row->addWidget(g_away_fouls_label);
+	fouls_row->addWidget(away_foul_plus);
+	fouls_row->addStretch(1);
+	root->addWidget(g_fouls_row_widget);
+
+	/* Fouls2 row: [-] 0 [+] | Label | [-] 0 [+] — wrapped for visibility toggle */
+	g_fouls2_row_widget = new QWidget(widget);
+	QHBoxLayout *fouls2_row = new QHBoxLayout(g_fouls2_row_widget);
+	fouls2_row->setContentsMargins(0, 0, 0, 0);
+	fouls2_row->setSpacing(2);
+
+	QPushButton *home_foul2_minus = new QPushButton("-", widget);
+	QPushButton *home_foul2_plus = new QPushButton("+", widget);
+	home_foul2_minus->setFixedWidth(28);
+	home_foul2_plus->setFixedWidth(28);
+	g_home_fouls2_label = new QLabel("0", widget);
+	g_home_fouls2_label->setAlignment(Qt::AlignCenter);
+	g_home_fouls2_label->setFixedWidth(32);
+	fouls2_row->addStretch(1);
+	fouls2_row->addWidget(home_foul2_minus);
+	fouls2_row->addWidget(g_home_fouls2_label);
+	fouls2_row->addWidget(home_foul2_plus);
+
+	g_fouls2_center_label = new QLabel(
+		QString::fromUtf8(scoreboard_get_foul_label2()), widget);
+	g_fouls2_center_label->setAlignment(Qt::AlignCenter);
+	g_fouls2_center_label->setStyleSheet(kMutedStyle);
+	g_fouls2_center_label->setFixedWidth(36);
+	fouls2_row->addSpacing(4);
+	fouls2_row->addWidget(g_fouls2_center_label);
+	fouls2_row->addSpacing(4);
+
+	QPushButton *away_foul2_minus = new QPushButton("-", widget);
+	QPushButton *away_foul2_plus = new QPushButton("+", widget);
+	away_foul2_minus->setFixedWidth(28);
+	away_foul2_plus->setFixedWidth(28);
+	g_away_fouls2_label = new QLabel("0", widget);
+	g_away_fouls2_label->setAlignment(Qt::AlignCenter);
+	g_away_fouls2_label->setFixedWidth(32);
+	fouls2_row->addWidget(away_foul2_minus);
+	fouls2_row->addWidget(g_away_fouls2_label);
+	fouls2_row->addWidget(away_foul2_plus);
+	fouls2_row->addStretch(1);
+	root->addWidget(g_fouls2_row_widget);
+
+	/* Penalty separator — hidden when penalties are off */
+	g_penalty_separator = new QFrame(widget);
+	g_penalty_separator->setFrameShape(QFrame::HLine);
+	g_penalty_separator->setFrameShadow(QFrame::Sunken);
+	g_penalty_separator->setFixedHeight(1);
+	root->addWidget(g_penalty_separator);
+
+	/* ---- SECTION: Penalties (dynamic, wrapped for visibility toggle) ---- */
+	g_penalty_section_widget = new QWidget(widget);
+	QVBoxLayout *pen_wrapper = new QVBoxLayout(g_penalty_section_widget);
+	pen_wrapper->setContentsMargins(0, 0, 0, 0);
+	pen_wrapper->setSpacing(2);
+
 	QHBoxLayout *pen_section = new QHBoxLayout();
 	pen_section->setContentsMargins(0, 0, 0, 0);
 	pen_section->setSpacing(6);
@@ -1919,14 +1948,22 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	away_pen_col->addWidget(away_pen_add);
 	pen_section->addLayout(away_pen_col, 1);
 
-	root->addLayout(pen_section);
+	pen_wrapper->addLayout(pen_section);
+	root->addWidget(g_penalty_section_widget);
 
 	add_separator();
 
-	/* Highlights generation button */
+	/* Highlights generation row: [Generate {Segment} Highlights] [Game Finished] */
+	QHBoxLayout *highlights_row = new QHBoxLayout();
+	highlights_row->setContentsMargins(0, 0, 0, 0);
+	highlights_row->setSpacing(6);
 	g_highlights_btn = new QPushButton("Generate Period Highlights", widget);
 	g_highlights_btn->setVisible(false);
-	root->addWidget(g_highlights_btn);
+	g_game_finished = new QCheckBox("Game Finished", widget);
+	g_game_finished->setVisible(false);
+	highlights_row->addWidget(g_highlights_btn, 1);
+	highlights_row->addWidget(g_game_finished);
+	root->addLayout(highlights_row);
 
 	/* ---- SECTION: Process Queue (hidden until a job is added) ---- */
 	g_queue_separator = new QFrame(widget);
@@ -1950,16 +1987,14 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	g_queue_empty_label->setAlignment(Qt::AlignCenter);
 	g_queue_empty_label->setStyleSheet(kMutedStyle);
 	g_queue_layout->addWidget(g_queue_empty_label);
-	g_queue_layout->addStretch(1);
 
 	g_queue_scroll = new QScrollArea(widget);
 	g_queue_scroll->setWidgetResizable(true);
 	g_queue_scroll->setWidget(g_queue_container);
 	g_queue_scroll->setFrameShape(QFrame::NoFrame);
+	g_queue_scroll->setMinimumHeight(80);
 	g_queue_scroll->setVisible(false);
-	root->addWidget(g_queue_scroll);
-
-	root->addStretch(1);
+	root->addWidget(g_queue_scroll, 1);
 
 	g_queue_container->setContextMenuPolicy(Qt::CustomContextMenu);
 	QObject::connect(
@@ -1977,22 +2012,22 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	/* Connect signals */
 	QObject::connect(clock_minus_min, &QPushButton::clicked, []() {
 		scoreboard_clock_adjust_minutes(-1);
-		scoreboard_write_all_files();
+		write_files_now();
 		update_all_labels();
 	});
 	QObject::connect(clock_minus_sec, &QPushButton::clicked, []() {
 		scoreboard_clock_adjust_seconds(-1);
-		scoreboard_write_all_files();
+		write_files_now();
 		update_all_labels();
 	});
 	QObject::connect(clock_plus_sec, &QPushButton::clicked, []() {
 		scoreboard_clock_adjust_seconds(1);
-		scoreboard_write_all_files();
+		write_files_now();
 		update_all_labels();
 	});
 	QObject::connect(clock_plus_min, &QPushButton::clicked, []() {
 		scoreboard_clock_adjust_minutes(1);
-		scoreboard_write_all_files();
+		write_files_now();
 		update_all_labels();
 	});
 	QObject::connect(g_clock_btn, &QPushButton::clicked, []() {
@@ -2002,10 +2037,12 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 			scoreboard_clock_start();
 		update_all_labels();
 	});
-	QObject::connect(period_adv_btn, &QPushButton::clicked, []() {
+	QObject::connect(g_period_adv_btn, &QPushButton::clicked, []() {
+		if (!confirm_mid_period_action(g_dock_widget,
+					       "advance the period"))
+			return;
 		scoreboard_period_advance();
-		if (g_auto_highlights)
-			start_highlights_generation();
+		run_reeln_segment_command();
 		update_all_labels();
 	});
 	QObject::connect(period_rew_btn, &QPushButton::clicked, []() {
@@ -2014,7 +2051,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(home_goal_plus, &QPushButton::clicked, []() {
 		scoreboard_increment_home_score();
-		fire_cli_event(SB_EVENT_HOME_GOAL);
 		update_all_labels();
 	});
 	QObject::connect(home_goal_minus, &QPushButton::clicked, []() {
@@ -2023,7 +2059,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(away_goal_plus, &QPushButton::clicked, []() {
 		scoreboard_increment_away_score();
-		fire_cli_event(SB_EVENT_AWAY_GOAL);
 		update_all_labels();
 	});
 	QObject::connect(away_goal_minus, &QPushButton::clicked, []() {
@@ -2046,15 +2081,55 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		scoreboard_decrement_away_shots();
 		update_all_labels();
 	});
+	QObject::connect(home_foul_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_home_fouls();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(home_foul_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_home_fouls();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(away_foul_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_away_fouls();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(away_foul_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_away_fouls();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(home_foul2_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_home_fouls2();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(home_foul2_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_home_fouls2();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(away_foul2_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_away_fouls2();
+		write_files_now();
+		update_all_labels();
+	});
+	QObject::connect(away_foul2_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_away_fouls2();
+		write_files_now();
+		update_all_labels();
+	});
 	QObject::connect(g_home_name_edit, &QLineEdit::editingFinished, []() {
 		scoreboard_set_home_name(
 			g_home_name_edit->text().trimmed().toUtf8().constData());
-		scoreboard_write_all_files();
+		write_files_now();
 	});
 	QObject::connect(g_away_name_edit, &QLineEdit::editingFinished, []() {
 		scoreboard_set_away_name(
 			g_away_name_edit->text().trimmed().toUtf8().constData());
-		scoreboard_write_all_files();
+		write_files_now();
 	});
 	QObject::connect(home_pen_add, &QPushButton::clicked, [widget]() {
 		open_add_penalty_dialog(widget, true);
@@ -2062,8 +2137,13 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(away_pen_add, &QPushButton::clicked, [widget]() {
 		open_add_penalty_dialog(widget, false);
 	});
-	QObject::connect(g_highlights_btn, &QPushButton::clicked,
-			 []() { start_highlights_generation(); });
+	QObject::connect(g_highlights_btn, &QPushButton::clicked, []() {
+		if (confirm_mid_period_action(g_dock_widget,
+					      "generate highlights"))
+			run_reeln_segment_command();
+	});
+	QObject::connect(g_game_finished, &QCheckBox::toggled,
+			 []() { update_all_labels(); });
 	/* Penalty clear buttons are connected dynamically in update_all_labels */
 
 	/* Menu actions */
@@ -2074,7 +2154,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(new_game_action, &QAction::triggered, []() {
 		scoreboard_new_game();
 		update_all_labels();
-		fire_cli_event(SB_EVENT_GAME_START);
 	});
 	QObject::connect(refresh_action, &QAction::triggered, []() {
 		scoreboard_read_all_files();
@@ -2088,6 +2167,12 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	g_tick_timer->setInterval(100);
 	QObject::connect(g_tick_timer, &QTimer::timeout, on_tick);
 	g_tick_timer->start();
+
+	/* File watcher for external changes */
+	g_file_watcher = new QFileSystemWatcher(widget);
+	QObject::connect(g_file_watcher, &QFileSystemWatcher::fileChanged,
+			 on_file_changed);
+	rebuild_file_watcher();
 
 	/* Register dock */
 	g_dock_widget = widget;
@@ -2104,7 +2189,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	register_hotkeys();
 
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
-	load_cli_config();
 	update_all_labels();
 	update_highlights_button_visibility();
 	log_info("[streamn-obs-scoreboard] dock initialized");
@@ -2124,12 +2208,11 @@ void scoreboard_dock_shutdown(void)
 		g_tick_timer = nullptr;
 	}
 
-	if (g_highlights_process) {
-		g_highlights_process->kill();
-		g_highlights_process->deleteLater();
-		g_highlights_process = nullptr;
-	}
+	g_file_watcher = nullptr;
+
 	g_highlights_btn = nullptr;
+	g_period_adv_btn = nullptr;
+	g_game_finished = nullptr;
 
 	for (process_job *job : g_jobs) {
 		if (!job)
@@ -2152,6 +2235,14 @@ void scoreboard_dock_shutdown(void)
 	g_away_score_label = nullptr;
 	g_home_shots_label = nullptr;
 	g_away_shots_label = nullptr;
+	g_fouls_row_widget = nullptr;
+	g_home_fouls_label = nullptr;
+	g_away_fouls_label = nullptr;
+	g_fouls_center_label = nullptr;
+	g_fouls2_row_widget = nullptr;
+	g_home_fouls2_label = nullptr;
+	g_away_fouls2_label = nullptr;
+	g_fouls2_center_label = nullptr;
 	for (penalty_row_widgets *pw : g_home_pen_rows)
 		delete pw;
 	g_home_pen_rows.clear();

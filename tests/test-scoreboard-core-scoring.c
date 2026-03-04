@@ -194,6 +194,111 @@ static void test_new_game_countup(void)
 	assert(scoreboard_clock_get_tenths() == 0);
 }
 
+static void test_dirty_home_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_score(5);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_home_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_home_score();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_home_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_home_score();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_away_score(3);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_away_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_away_score();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_away_score(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_away_score();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_home_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_shots(10);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_home_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_home_shots();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_home_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_home_shots();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_away_shots(5);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_away_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_away_shots();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_away_shots(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_away_shots();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_home_name(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_name("Eagles");
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_name(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_away_name("Hawks");
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_new_game(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_new_game();
+	assert(scoreboard_is_dirty());
+}
+
 int main(void)
 {
 	test_home_score();
@@ -214,6 +319,21 @@ int main(void)
 	test_name_truncation();
 	test_new_game();
 	test_new_game_countup();
+	test_dirty_home_score();
+	test_dirty_increment_home_score();
+	test_dirty_decrement_home_score();
+	test_dirty_away_score();
+	test_dirty_increment_away_score();
+	test_dirty_decrement_away_score();
+	test_dirty_home_shots();
+	test_dirty_increment_home_shots();
+	test_dirty_decrement_home_shots();
+	test_dirty_away_shots();
+	test_dirty_increment_away_shots();
+	test_dirty_decrement_away_shots();
+	test_dirty_home_name();
+	test_dirty_away_name();
+	test_dirty_new_game();
 
 	printf("All scoreboard-core scoring tests passed.\n");
 	return 0;

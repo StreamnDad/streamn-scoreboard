@@ -4,7 +4,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
-OBS Studio plugin that tracks youth hockey scoreboard state and writes it to individual text files. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
+OBS Studio plugin that tracks live game scoreboard state and writes it to individual text files. Supports hockey, basketball, soccer, football, lacrosse, rugby, and a generic preset. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
 
 <p align="center">
   <img src="images/streamn-scoreboard.png" alt="Streamn Scoreboard dock UI" width="360">
@@ -12,10 +12,13 @@ OBS Studio plugin that tracks youth hockey scoreboard state and writes it to ind
 
 ## Features
 
-- **12 text files** updated in real-time: clock, period, scores, shots, team names, penalties
+- **7 sport presets** — hockey, basketball, soccer, football, lacrosse, rugby, and generic
+- **17 text files** updated in real-time: clock, period, scores, shots, team names, penalties, fouls, and sport
 - **Dock UI** with full scoreboard controls in an OBS dock panel
-- **22 OBS hotkeys** for hands-free operation during broadcasts
-- **Penalty tracking** with automatic countdown timers (2 slots per team)
+- **31 OBS hotkeys** for hands-free operation during broadcasts
+- **Penalty tracking** with automatic countdown timers (hockey, lacrosse, rugby)
+- **Foul/card counters** for basketball, soccer, and football
+- **reeln-cli integration** for automated highlight generation
 
 Build your own scorebug overlay using OBS Text sources pointed at the output files:
 
@@ -23,7 +26,7 @@ Build your own scorebug overlay using OBS Text sources pointed at the output fil
 
 ## Compatibility
 
-- **OBS Studio** 30.0+ (uses Qt5 dock API)
+- **OBS Studio** 30.0+ (Qt5/Qt6)
 - **macOS** (Apple Silicon and Intel)
 - **Windows** (x64)
 - **Linux** (x86_64)
@@ -123,10 +126,17 @@ Set an output directory in the dock settings. The plugin writes these files on e
 | `home_penalty_times.txt` | Home penalty times remaining | `1:32 0:45` |
 | `away_penalty_numbers.txt` | Away penalty player numbers | `#19` |
 | `away_penalty_times.txt` | Away penalty times remaining | `0:22` |
+| `home_fouls.txt` | Home fouls/yellow cards/flags | `3` |
+| `away_fouls.txt` | Away fouls/yellow cards/flags | `2` |
+| `home_fouls2.txt` | Home second counter (e.g. red cards) | `0` |
+| `away_fouls2.txt` | Away second counter (e.g. red cards) | `1` |
+| `sport.txt` | Active sport preset | `hockey` |
+
+Not all files are relevant for every sport — shots are only tracked for hockey and lacrosse, penalties for hockey/lacrosse/rugby, and fouls for basketball/soccer/football. Files for inactive features still exist but won't change.
 
 ## Hotkeys
 
-All 22 hotkeys are prefixed with "Streamn:" in OBS Settings > Hotkeys:
+All 31 hotkeys are prefixed with "Streamn:" in OBS Settings > Hotkeys:
 
 | Hotkey | Action |
 |--------|--------|
@@ -137,8 +147,11 @@ All 22 hotkeys are prefixed with "Streamn:" in OBS Settings > Hotkeys:
 | Home/Away Goal +/- | Adjust score (4 hotkeys) |
 | Home/Away Shot +/- | Adjust shots (4 hotkeys) |
 | Period Advance / Rewind | Change period |
-| Home/Away Penalty Add | Add 2:00 minor penalty |
+| Home/Away Penalty Add | Add penalty with default duration |
 | Home/Away Penalty Clear 1/2 | Clear penalty slot (4 hotkeys) |
+| Generate Highlights | Trigger reeln-cli highlight generation |
+| Home/Away Foul +/- | Adjust foul counter (4 hotkeys) |
+| Home/Away Foul2 +/- | Adjust second foul counter (4 hotkeys) |
 
 ## Development
 
