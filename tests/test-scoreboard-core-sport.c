@@ -2,9 +2,56 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#define mkdir(path, mode) _mkdir(path)
+#define rmdir(path) _rmdir(path)
+#define getpid() _getpid()
+#else
 #include <unistd.h>
+#endif
+
+static int g_tmp_counter = 0;
+
+static void make_tmp_dir(char *buf, size_t size)
+{
+#ifdef _WIN32
+	snprintf(buf, size, "%s\\sb_sport_%d_%d",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid(),
+		 g_tmp_counter++);
+#else
+	snprintf(buf, size, "/tmp/sb_sport_%d_%d", (int)getpid(),
+		 g_tmp_counter++);
+#endif
+	mkdir(buf, 0755);
+}
+
+static void make_tmp_file(char *buf, size_t size)
+{
+#ifdef _WIN32
+	snprintf(buf, size, "%s\\sb_sport_%d_%d.json",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid(),
+		 g_tmp_counter++);
+#else
+	snprintf(buf, size, "/tmp/sb_sport_%d_%d.json", (int)getpid(),
+		 g_tmp_counter++);
+#endif
+}
+
+static void cleanup_dir(const char *dir)
+{
+	char cmd[512];
+#ifdef _WIN32
+	snprintf(cmd, sizeof(cmd), "rmdir /S /Q \"%s\"", dir);
+#else
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+#endif
+	system(cmd);
+}
 
 static void test_default_sport_is_hockey(void)
 {
@@ -197,8 +244,8 @@ static void test_parse_period_basketball(void)
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
 
-	char tmpdir[] = "/tmp/sb_sport_test_XXXXXX";
-	assert(mkdtemp(tmpdir) != NULL);
+	char tmpdir[256];
+	make_tmp_dir(tmpdir, sizeof(tmpdir));
 	scoreboard_set_output_directory(tmpdir);
 
 	/* Write basketball state: period 5 = OT */
@@ -212,31 +259,7 @@ static void test_parse_period_basketball(void)
 	assert(scoreboard_get_period() == 5);
 
 	/* Cleanup */
-	char path[1024];
-	const char *files[] = {
-		"clock.txt",
-		"period.txt",
-		"home_name.txt",
-		"away_name.txt",
-		"home_score.txt",
-		"away_score.txt",
-		"home_shots.txt",
-		"away_shots.txt",
-		"home_fouls.txt",
-		"away_fouls.txt",
-		"home_fouls2.txt",
-		"away_fouls2.txt",
-		"home_penalty_numbers.txt",
-		"home_penalty_times.txt",
-		"away_penalty_numbers.txt",
-		"away_penalty_times.txt",
-		"sport.txt",
-	};
-	for (int i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
-		snprintf(path, sizeof(path), "%s/%s", tmpdir, files[i]);
-		remove(path);
-	}
-	rmdir(tmpdir);
+	cleanup_dir(tmpdir);
 }
 
 static void test_sport_write_read_files(void)
@@ -244,8 +267,8 @@ static void test_sport_write_read_files(void)
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_sport(SCOREBOARD_SPORT_SOCCER);
 
-	char tmpdir[] = "/tmp/sb_sport_rw_XXXXXX";
-	assert(mkdtemp(tmpdir) != NULL);
+	char tmpdir[256];
+	make_tmp_dir(tmpdir, sizeof(tmpdir));
 	scoreboard_set_output_directory(tmpdir);
 
 	scoreboard_mark_dirty();
@@ -259,31 +282,7 @@ static void test_sport_write_read_files(void)
 	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_SOCCER);
 
 	/* Cleanup */
-	char path[1024];
-	const char *files[] = {
-		"clock.txt",
-		"period.txt",
-		"home_name.txt",
-		"away_name.txt",
-		"home_score.txt",
-		"away_score.txt",
-		"home_shots.txt",
-		"away_shots.txt",
-		"home_fouls.txt",
-		"away_fouls.txt",
-		"home_fouls2.txt",
-		"away_fouls2.txt",
-		"home_penalty_numbers.txt",
-		"home_penalty_times.txt",
-		"away_penalty_numbers.txt",
-		"away_penalty_times.txt",
-		"sport.txt",
-	};
-	for (int i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
-		snprintf(path, sizeof(path), "%s/%s", tmpdir, files[i]);
-		remove(path);
-	}
-	rmdir(tmpdir);
+	cleanup_dir(tmpdir);
 }
 
 static void test_sport_save_load_state(void)
@@ -291,10 +290,8 @@ static void test_sport_save_load_state(void)
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_sport(SCOREBOARD_SPORT_LACROSSE);
 
-	char tmpfile[] = "/tmp/sb_sport_state_XXXXXX";
-	int fd = mkstemp(tmpfile);
-	assert(fd >= 0);
-	close(fd);
+	char tmpfile[256];
+	make_tmp_file(tmpfile, sizeof(tmpfile));
 
 	assert(scoreboard_save_state(tmpfile));
 
@@ -463,8 +460,8 @@ static void test_fouls_write_read_files(void)
 	scoreboard_set_home_fouls2(2);
 	scoreboard_set_away_fouls2(1);
 
-	char tmpdir[] = "/tmp/sb_fouls_rw_XXXXXX";
-	assert(mkdtemp(tmpdir) != NULL);
+	char tmpdir[256];
+	make_tmp_dir(tmpdir, sizeof(tmpdir));
 	scoreboard_set_output_directory(tmpdir);
 
 	scoreboard_mark_dirty();
@@ -482,31 +479,7 @@ static void test_fouls_write_read_files(void)
 	assert(scoreboard_get_away_fouls2() == 1);
 
 	/* Cleanup */
-	char path[1024];
-	const char *files[] = {
-		"clock.txt",
-		"period.txt",
-		"home_name.txt",
-		"away_name.txt",
-		"home_score.txt",
-		"away_score.txt",
-		"home_shots.txt",
-		"away_shots.txt",
-		"home_fouls.txt",
-		"away_fouls.txt",
-		"home_fouls2.txt",
-		"away_fouls2.txt",
-		"home_penalty_numbers.txt",
-		"home_penalty_times.txt",
-		"away_penalty_numbers.txt",
-		"away_penalty_times.txt",
-		"sport.txt",
-	};
-	for (int i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
-		snprintf(path, sizeof(path), "%s/%s", tmpdir, files[i]);
-		remove(path);
-	}
-	rmdir(tmpdir);
+	cleanup_dir(tmpdir);
 }
 
 static void test_fouls_save_load_state(void)
@@ -517,10 +490,8 @@ static void test_fouls_save_load_state(void)
 	scoreboard_set_home_fouls2(4);
 	scoreboard_set_away_fouls2(2);
 
-	char tmpfile[] = "/tmp/sb_fouls_state_XXXXXX";
-	int fd = mkstemp(tmpfile);
-	assert(fd >= 0);
-	close(fd);
+	char tmpfile[256];
+	make_tmp_file(tmpfile, sizeof(tmpfile));
 
 	assert(scoreboard_save_state(tmpfile));
 
