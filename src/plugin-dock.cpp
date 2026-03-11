@@ -121,6 +121,11 @@ QPushButton *g_highlights_btn = nullptr;
 QPushButton *g_period_adv_btn = nullptr;
 QCheckBox *g_game_finished = nullptr;
 
+/* Stream-relative event timestamps */
+QElapsedTimer g_stream_timer;
+bool g_stream_active = false;
+QPushButton *g_copy_timestamps_btn = nullptr;
+
 static const int kNumHotkeys = 31;
 
 static const char *kHotkeyNames[kNumHotkeys] = {
@@ -512,6 +517,96 @@ void clear_completed_jobs()
 	refresh_queue_placeholder();
 }
 
+/* ---- Event timestamp helpers ---- */
+
+int stream_offset_seconds()
+{
+	if (!g_stream_active)
+		return -1;
+	return (int)(g_stream_timer.elapsed() / 1000);
+}
+
+void log_event(const char *label)
+{
+	int offset = stream_offset_seconds();
+	if (offset < 0)
+		return;
+	scoreboard_event_log_add(offset, label);
+}
+
+void log_period_start_event()
+{
+	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
+	char period_buf[64];
+	scoreboard_format_period(period_buf, sizeof(period_buf));
+	snprintf(buf, sizeof(buf), "%s %s Start",
+		 scoreboard_get_segment_name(), period_buf);
+	log_event(buf);
+}
+
+void log_period_end_event()
+{
+	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
+	char period_buf[64];
+	scoreboard_format_period(period_buf, sizeof(period_buf));
+	snprintf(buf, sizeof(buf), "%s %s End",
+		 scoreboard_get_segment_name(), period_buf);
+	log_event(buf);
+}
+
+void log_goal_event(bool home)
+{
+	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
+	snprintf(buf, sizeof(buf), "Goal: %s (%d-%d)",
+		 home ? scoreboard_get_home_name()
+		      : scoreboard_get_away_name(),
+		 scoreboard_get_home_score(),
+		 scoreboard_get_away_score());
+	log_event(buf);
+}
+
+void log_penalty_event(bool home, int player_number)
+{
+	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
+	if (player_number > 0)
+		snprintf(buf, sizeof(buf), "Penalty: %s #%d",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name(),
+			 player_number);
+	else
+		snprintf(buf, sizeof(buf), "Penalty: %s",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name());
+	log_event(buf);
+}
+
+void log_game_end_event()
+{
+	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
+	snprintf(buf, sizeof(buf), "Game End \xe2\x80\x94 %s %d, %s %d",
+		 scoreboard_get_home_name(), scoreboard_get_home_score(),
+		 scoreboard_get_away_name(), scoreboard_get_away_score());
+	log_event(buf);
+}
+
+void write_timestamps_file()
+{
+	const char *dir = scoreboard_get_output_directory();
+	if (dir[0] == '\0')
+		return;
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/timestamps.txt", dir);
+	if (scoreboard_event_log_write(path))
+		log_info("[streamn-obs-scoreboard] wrote timestamps.txt");
+}
+
+void update_copy_timestamps_visibility()
+{
+	if (g_copy_timestamps_btn)
+		g_copy_timestamps_btn->setVisible(
+			scoreboard_event_log_count() > 0);
+}
+
 void run_reeln_segment_command()
 {
 	const QString executable =
@@ -527,6 +622,9 @@ void run_reeln_segment_command()
 	bool game_finished =
 		g_game_finished && g_game_finished->isChecked();
 	if (game_finished) {
+		log_game_end_event();
+		write_timestamps_file();
+		update_copy_timestamps_visibility();
 		QStringList args;
 		args << "game" << "highlights" << extra_parts;
 		add_job_row("Game Highlights", args);
@@ -903,7 +1001,9 @@ void open_add_penalty_dialog(QWidget *parent, bool home)
 		else
 			slot = scoreboard_away_penalty_add(player_num,
 							   dur_spin->value());
-		if (slot < 0)
+		if (slot >= 0)
+			log_penalty_event(home, player_num);
+		else
 			log_info("[streamn-obs-scoreboard] penalty slots full");
 		update_all_labels();
 	}
@@ -1224,10 +1324,12 @@ void hk_clock_startstop(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (!pressed)
 		return;
-	if (scoreboard_clock_is_running())
+	if (scoreboard_clock_is_running()) {
 		scoreboard_clock_stop();
-	else
+	} else {
 		scoreboard_clock_start();
+		log_period_start_event();
+	}
 }
 
 void hk_clock_reset(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1263,8 +1365,10 @@ void hk_clock_minus1sec(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_increment_home_score();
+	if (!pressed)
+		return;
+	scoreboard_increment_home_score();
+	log_goal_event(true);
 }
 
 void hk_home_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1287,8 +1391,10 @@ void hk_home_shot_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_away_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_increment_away_score();
+	if (!pressed)
+		return;
+	scoreboard_increment_away_score();
+	log_goal_event(false);
 }
 
 void hk_away_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1315,6 +1421,7 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 		return;
 	if (scoreboard_clock_is_running())
 		return;
+	log_period_end_event();
 	scoreboard_period_advance();
 	run_reeln_segment_command();
 }
@@ -1327,9 +1434,11 @@ void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_home_penalty_add(
-			0, scoreboard_get_default_penalty_duration());
+	if (!pressed)
+		return;
+	scoreboard_home_penalty_add(
+		0, scoreboard_get_default_penalty_duration());
+	log_penalty_event(true, 0);
 }
 
 void hk_home_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1346,9 +1455,11 @@ void hk_home_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_away_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_away_penalty_add(
-			0, scoreboard_get_default_penalty_duration());
+	if (!pressed)
+		return;
+	scoreboard_away_penalty_add(
+		0, scoreboard_get_default_penalty_duration());
+	log_penalty_event(false, 0);
 }
 
 void hk_away_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1577,6 +1688,21 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		rebuild_file_watcher();
 		update_all_labels();
 		update_highlights_button_visibility();
+	}
+	if (event == OBS_FRONTEND_EVENT_STREAMING_STARTED) {
+		g_stream_timer.start();
+		g_stream_active = true;
+		scoreboard_event_log_clear();
+		log_event("Stream Start");
+		log_info("[streamn-obs-scoreboard] streaming started — "
+			 "event timestamps enabled");
+	}
+	if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPED) {
+		g_stream_active = false;
+		write_timestamps_file();
+		update_copy_timestamps_visibility();
+		log_info("[streamn-obs-scoreboard] streaming stopped — "
+			 "timestamps written");
 	}
 }
 } // namespace
@@ -1965,6 +2091,12 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	highlights_row->addWidget(g_game_finished);
 	root->addLayout(highlights_row);
 
+	/* Copy Timestamps button (visible after events are logged) */
+	g_copy_timestamps_btn =
+		new QPushButton("Copy Timestamps to Clipboard", widget);
+	g_copy_timestamps_btn->setVisible(false);
+	root->addWidget(g_copy_timestamps_btn);
+
 	/* ---- SECTION: Process Queue (hidden until a job is added) ---- */
 	g_queue_separator = new QFrame(widget);
 	g_queue_separator->setFrameShape(QFrame::HLine);
@@ -2031,16 +2163,19 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		update_all_labels();
 	});
 	QObject::connect(g_clock_btn, &QPushButton::clicked, []() {
-		if (scoreboard_clock_is_running())
+		if (scoreboard_clock_is_running()) {
 			scoreboard_clock_stop();
-		else
+		} else {
 			scoreboard_clock_start();
+			log_period_start_event();
+		}
 		update_all_labels();
 	});
 	QObject::connect(g_period_adv_btn, &QPushButton::clicked, []() {
 		if (!confirm_mid_period_action(g_dock_widget,
 					       "advance the period"))
 			return;
+		log_period_end_event();
 		scoreboard_period_advance();
 		run_reeln_segment_command();
 		update_all_labels();
@@ -2051,6 +2186,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(home_goal_plus, &QPushButton::clicked, []() {
 		scoreboard_increment_home_score();
+		log_goal_event(true);
 		update_all_labels();
 	});
 	QObject::connect(home_goal_minus, &QPushButton::clicked, []() {
@@ -2059,6 +2195,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(away_goal_plus, &QPushButton::clicked, []() {
 		scoreboard_increment_away_score();
+		log_goal_event(false);
 		update_all_labels();
 	});
 	QObject::connect(away_goal_minus, &QPushButton::clicked, []() {
@@ -2144,6 +2281,29 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(g_game_finished, &QCheckBox::toggled,
 			 []() { update_all_labels(); });
+	QObject::connect(g_copy_timestamps_btn, &QPushButton::clicked, []() {
+		/* Build YouTube chapters text from event log */
+		QString text;
+		int count = scoreboard_event_log_count();
+		for (int i = 0; i < count; i++) {
+			const struct scoreboard_game_event *ev =
+				scoreboard_event_log_get(i);
+			if (!ev)
+				continue;
+			int total = ev->offset_seconds;
+			int hours = total / 3600;
+			int minutes = (total % 3600) / 60;
+			int seconds = total % 60;
+			if (!text.isEmpty())
+				text += "\n";
+			text += QString::asprintf("%d:%02d:%02d %s", hours,
+						  minutes, seconds,
+						  ev->label);
+		}
+		QGuiApplication::clipboard()->setText(text);
+		log_info("[streamn-obs-scoreboard] timestamps copied to "
+			 "clipboard");
+	});
 	/* Penalty clear buttons are connected dynamically in update_all_labels */
 
 	/* Menu actions */
@@ -2153,6 +2313,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 			 [widget]() { open_clock_settings_dialog(widget); });
 	QObject::connect(new_game_action, &QAction::triggered, []() {
 		scoreboard_new_game();
+		scoreboard_event_log_clear();
+		update_copy_timestamps_visibility();
 		update_all_labels();
 	});
 	QObject::connect(refresh_action, &QAction::triggered, []() {
@@ -2213,6 +2375,8 @@ void scoreboard_dock_shutdown(void)
 	g_highlights_btn = nullptr;
 	g_period_adv_btn = nullptr;
 	g_game_finished = nullptr;
+	g_copy_timestamps_btn = nullptr;
+	g_stream_active = false;
 
 	for (process_job *job : g_jobs) {
 		if (!job)

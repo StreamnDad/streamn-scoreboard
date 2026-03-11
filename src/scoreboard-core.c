@@ -73,6 +73,11 @@ static struct {
 
 static bool g_dirty;
 
+/* ---- game event log ---- */
+static struct scoreboard_game_event
+	g_event_log[SCOREBOARD_MAX_EVENTS];
+static int g_event_count;
+
 /* ---- helpers ---- */
 
 static void mark_dirty(void)
@@ -310,6 +315,8 @@ void scoreboard_reset_state_for_tests(void)
 {
 	memset(&g_state, 0, sizeof(g_state));
 	g_dirty = false;
+	g_event_count = 0;
+	memset(g_event_log, 0, sizeof(g_event_log));
 	g_state.period = 1;
 	g_state.period_length = SCOREBOARD_DEFAULT_PERIOD_LENGTH;
 	g_state.clock_direction = SCOREBOARD_CLOCK_COUNT_DOWN;
@@ -1489,4 +1496,59 @@ size_t scoreboard_copy_action_logs(char *buffer, size_t buffer_size)
 	}
 
 	return written;
+}
+
+/* ---- game event log ---- */
+
+void scoreboard_event_log_clear(void)
+{
+	g_event_count = 0;
+}
+
+int scoreboard_event_log_add(int offset_seconds, const char *label)
+{
+	if (g_event_count >= SCOREBOARD_MAX_EVENTS)
+		return -1;
+	if (label == NULL)
+		return -1;
+	if (offset_seconds < 0)
+		offset_seconds = 0;
+	int idx = g_event_count;
+	g_event_log[idx].offset_seconds = offset_seconds;
+	safe_copy(g_event_log[idx].label, label, SCOREBOARD_EVENT_LABEL_SIZE);
+	g_event_count++;
+	return idx;
+}
+
+int scoreboard_event_log_count(void)
+{
+	return g_event_count;
+}
+
+const struct scoreboard_game_event *scoreboard_event_log_get(int index)
+{
+	if (index < 0 || index >= g_event_count)
+		return NULL;
+	return &g_event_log[index];
+}
+
+bool scoreboard_event_log_write(const char *path)
+{
+	if (path == NULL)
+		return false;
+	FILE *f = fopen(path, "w");
+	if (f == NULL)
+		return false;
+
+	for (int i = 0; i < g_event_count; i++) {
+		int total = g_event_log[i].offset_seconds;
+		int hours = total / 3600;
+		int minutes = (total % 3600) / 60;
+		int seconds = total % 60;
+		fprintf(f, "%d:%02d:%02d %s\n", hours, minutes, seconds,
+			g_event_log[i].label);
+	}
+
+	fclose(f);
+	return true;
 }

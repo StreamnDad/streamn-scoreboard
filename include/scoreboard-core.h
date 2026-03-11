@@ -196,6 +196,21 @@ const char *scoreboard_get_foul_label2(void);
 void scoreboard_add_action_log(const char *message);
 size_t scoreboard_copy_action_logs(char *buffer, size_t buffer_size);
 
+/* Game event log — append-only timestamped events for YouTube chapters */
+#define SCOREBOARD_MAX_EVENTS 256
+#define SCOREBOARD_EVENT_LABEL_SIZE 128
+
+struct scoreboard_game_event {
+	int offset_seconds;
+	char label[SCOREBOARD_EVENT_LABEL_SIZE];
+};
+
+void scoreboard_event_log_clear(void);
+int scoreboard_event_log_add(int offset_seconds, const char *label);
+int scoreboard_event_log_count(void);
+const struct scoreboard_game_event *scoreboard_event_log_get(int index);
+bool scoreboard_event_log_write(const char *path);
+
 #ifdef __cplusplus
 }
 #endif
