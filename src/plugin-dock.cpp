@@ -529,6 +529,11 @@ int stream_offset_seconds()
 	return (int)(g_stream_timer.elapsed() / 1000);
 }
 
+/* Default seconds to subtract from goal timestamps to account for
+   the delay between a goal being scored and the operator pressing
+   the button.  Clamped so it never goes below 0:00:00. */
+static const int kGoalDelaySeconds = 10;
+
 void log_event(const char *label)
 {
 	int offset = stream_offset_seconds();
@@ -537,6 +542,27 @@ void log_event(const char *label)
 	scoreboard_event_log_add(offset, label);
 	write_timestamps_file();
 	update_copy_timestamps_visibility();
+}
+
+void log_event_with_offset(const char *label, int offset)
+{
+	if (!g_stream_active)
+		return;
+	if (offset < 0)
+		offset = 0;
+	scoreboard_event_log_add(offset, label);
+	write_timestamps_file();
+	update_copy_timestamps_visibility();
+}
+
+void remove_last_event(const char *prefix)
+{
+	int idx = scoreboard_event_log_find_last(prefix);
+	if (idx >= 0) {
+		scoreboard_event_log_remove(idx);
+		write_timestamps_file();
+		update_copy_timestamps_visibility();
+	}
 }
 
 void log_period_start_event()
@@ -561,28 +587,57 @@ void log_period_end_event()
 
 void log_goal_event(bool home)
 {
+	int offset = stream_offset_seconds();
+	if (offset < 0)
+		return;
+	offset -= kGoalDelaySeconds;
+
 	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
 	snprintf(buf, sizeof(buf), "Goal: %s (%d-%d)",
 		 home ? scoreboard_get_home_name()
 		      : scoreboard_get_away_name(),
 		 scoreboard_get_home_score(),
 		 scoreboard_get_away_score());
-	log_event(buf);
+	log_event_with_offset(buf, offset);
+}
+
+void remove_goal_event(bool home)
+{
+	char prefix[SCOREBOARD_EVENT_LABEL_SIZE];
+	snprintf(prefix, sizeof(prefix), "Goal: %s",
+		 home ? scoreboard_get_home_name()
+		      : scoreboard_get_away_name());
+	remove_last_event(prefix);
 }
 
 void log_penalty_event(bool home, int player_number)
 {
 	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
 	if (player_number > 0)
-		snprintf(buf, sizeof(buf), "Penalty: %s #%d",
+		snprintf(buf, sizeof(buf), "Power Play: %s #%d",
 			 home ? scoreboard_get_home_name()
 			      : scoreboard_get_away_name(),
 			 player_number);
 	else
-		snprintf(buf, sizeof(buf), "Penalty: %s",
+		snprintf(buf, sizeof(buf), "Power Play: %s",
 			 home ? scoreboard_get_home_name()
 			      : scoreboard_get_away_name());
 	log_event(buf);
+}
+
+void remove_penalty_event(bool home, int player_number)
+{
+	char prefix[SCOREBOARD_EVENT_LABEL_SIZE];
+	if (player_number > 0)
+		snprintf(prefix, sizeof(prefix), "Power Play: %s #%d",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name(),
+			 player_number);
+	else
+		snprintf(prefix, sizeof(prefix), "Power Play: %s",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name());
+	remove_last_event(prefix);
 }
 
 void log_game_end_event()
@@ -821,6 +876,14 @@ void update_all_labels()
 			QObject::connect(
 				pw->clear_btn, &QPushButton::clicked,
 				[captured_slot, captured_home]() {
+					const struct scoreboard_penalty *p =
+						captured_home
+						? scoreboard_get_home_penalty(captured_slot)
+						: scoreboard_get_away_penalty(captured_slot);
+					if (p && p->active)
+						remove_penalty_event(
+							captured_home,
+							p->player_number);
 					if (captured_home)
 						scoreboard_home_penalty_clear(
 							captured_slot);
@@ -1376,8 +1439,10 @@ void hk_home_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_decrement_home_score();
+	if (!pressed)
+		return;
+	remove_goal_event(true);
+	scoreboard_decrement_home_score();
 }
 
 void hk_home_shot_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1402,8 +1467,10 @@ void hk_away_goal_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_away_goal_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_decrement_away_score();
+	if (!pressed)
+		return;
+	remove_goal_event(false);
+	scoreboard_decrement_away_score();
 }
 
 void hk_away_shot_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1446,14 +1513,22 @@ void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_home_penalty_clear(0);
+	if (!pressed)
+		return;
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	if (p && p->active)
+		remove_penalty_event(true, p->player_number);
+	scoreboard_home_penalty_clear(0);
 }
 
 void hk_home_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_home_penalty_clear(1);
+	if (!pressed)
+		return;
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(1);
+	if (p && p->active)
+		remove_penalty_event(true, p->player_number);
+	scoreboard_home_penalty_clear(1);
 }
 
 void hk_away_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1467,14 +1542,22 @@ void hk_away_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_away_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_away_penalty_clear(0);
+	if (!pressed)
+		return;
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	if (p && p->active)
+		remove_penalty_event(false, p->player_number);
+	scoreboard_away_penalty_clear(0);
 }
 
 void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_away_penalty_clear(1);
+	if (!pressed)
+		return;
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(1);
+	if (p && p->active)
+		remove_penalty_event(false, p->player_number);
+	scoreboard_away_penalty_clear(1);
 }
 
 void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
@@ -2193,6 +2276,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		update_all_labels();
 	});
 	QObject::connect(home_goal_minus, &QPushButton::clicked, []() {
+		remove_goal_event(true);
 		scoreboard_decrement_home_score();
 		update_all_labels();
 	});
@@ -2202,6 +2286,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		update_all_labels();
 	});
 	QObject::connect(away_goal_minus, &QPushButton::clicked, []() {
+		remove_goal_event(false);
 		scoreboard_decrement_away_score();
 		update_all_labels();
 	});

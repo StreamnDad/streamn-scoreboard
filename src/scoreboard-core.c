@@ -1520,6 +1520,28 @@ int scoreboard_event_log_add(int offset_seconds, const char *label)
 	return idx;
 }
 
+bool scoreboard_event_log_remove(int index)
+{
+	if (index < 0 || index >= g_event_count)
+		return false;
+	for (int i = index; i < g_event_count - 1; i++)
+		g_event_log[i] = g_event_log[i + 1];
+	g_event_count--;
+	return true;
+}
+
+int scoreboard_event_log_find_last(const char *prefix)
+{
+	if (prefix == NULL)
+		return -1;
+	size_t len = strlen(prefix);
+	for (int i = g_event_count - 1; i >= 0; i--) {
+		if (strncmp(g_event_log[i].label, prefix, len) == 0)
+			return i;
+	}
+	return -1;
+}
+
 int scoreboard_event_log_count(void)
 {
 	return g_event_count;
