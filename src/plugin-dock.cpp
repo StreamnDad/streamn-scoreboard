@@ -519,6 +519,9 @@ void clear_completed_jobs()
 
 /* ---- Event timestamp helpers ---- */
 
+void write_timestamps_file();
+void update_copy_timestamps_visibility();
+
 int stream_offset_seconds()
 {
 	if (!g_stream_active)
@@ -532,6 +535,8 @@ void log_event(const char *label)
 	if (offset < 0)
 		return;
 	scoreboard_event_log_add(offset, label);
+	write_timestamps_file();
+	update_copy_timestamps_visibility();
 }
 
 void log_period_start_event()
@@ -623,8 +628,6 @@ void run_reeln_segment_command()
 		g_game_finished && g_game_finished->isChecked();
 	if (game_finished) {
 		log_game_end_event();
-		write_timestamps_file();
-		update_copy_timestamps_visibility();
 		QStringList args;
 		args << "game" << "highlights" << extra_parts;
 		add_job_row("Game Highlights", args);
