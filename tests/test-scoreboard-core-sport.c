@@ -599,6 +599,58 @@ static void test_fouls2_reset_by_new_game(void)
 	assert(scoreboard_get_away_fouls2() == 0);
 }
 
+static void test_log_scores_per_sport(void)
+{
+	scoreboard_reset_state_for_tests();
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_log_scores() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	assert(scoreboard_get_log_scores() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(scoreboard_get_log_scores() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_FOOTBALL);
+	assert(scoreboard_get_log_scores() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_LACROSSE);
+	assert(scoreboard_get_log_scores() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_RUGBY);
+	assert(scoreboard_get_log_scores() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_GENERIC);
+	assert(scoreboard_get_log_scores() == true);
+}
+
+static void test_score_label_per_sport(void)
+{
+	scoreboard_reset_state_for_tests();
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(strcmp(scoreboard_get_score_label(), "Goal") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	assert(strcmp(scoreboard_get_score_label(), "Score") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(strcmp(scoreboard_get_score_label(), "Goal") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_FOOTBALL);
+	assert(strcmp(scoreboard_get_score_label(), "Score") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_LACROSSE);
+	assert(strcmp(scoreboard_get_score_label(), "Goal") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_RUGBY);
+	assert(strcmp(scoreboard_get_score_label(), "Try") == 0);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_GENERIC);
+	assert(strcmp(scoreboard_get_score_label(), "Score") == 0);
+}
+
 int main(void)
 {
 	test_default_sport_is_hockey();
@@ -637,6 +689,8 @@ int main(void)
 	test_has_fouls2_per_sport();
 	test_foul2_label_per_sport();
 	test_fouls2_reset_by_new_game();
+	test_log_scores_per_sport();
+	test_score_label_per_sport();
 
 	printf("All scoreboard-core sport tests passed.\n");
 	return 0;

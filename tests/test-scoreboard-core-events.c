@@ -31,7 +31,11 @@ static void setup_tmp_dir(void)
 static void cleanup_tmp_dir(void)
 {
 	char cmd[512];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", g_tmp_dir);
+#ifdef _WIN32
+	snprintf(cmd, sizeof(cmd), "rmdir /s /q \"%s\"", g_tmp_dir);
+#else
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", g_tmp_dir);
+#endif
 	system(cmd);
 }
 
@@ -391,10 +395,18 @@ static void test_event_log_find_last_null(void)
 	assert(scoreboard_event_log_find_last(NULL) == -1);
 }
 
-static void test_event_log_find_last_empty(void)
+static void test_event_log_find_last_empty_log(void)
 {
 	scoreboard_reset_state_for_tests();
 	assert(scoreboard_event_log_find_last("anything") == -1);
+}
+
+static void test_event_log_find_last_empty_prefix(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_event_log_add(0, "Event");
+	/* Empty prefix should not match anything */
+	assert(scoreboard_event_log_find_last("") == -1);
 }
 
 static void test_event_log_find_and_remove(void)
@@ -457,7 +469,8 @@ int main(void)
 	test_event_log_find_last_basic();
 	test_event_log_find_last_not_found();
 	test_event_log_find_last_null();
-	test_event_log_find_last_empty();
+	test_event_log_find_last_empty_log();
+	test_event_log_find_last_empty_prefix();
 	test_event_log_find_and_remove();
 	printf("All event log tests passed!\n");
 	return 0;

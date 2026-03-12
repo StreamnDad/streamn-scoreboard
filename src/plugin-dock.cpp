@@ -5,6 +5,12 @@
 #include <obs-frontend-api.h>
 #include <util/config-file.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 #include <QtCore/QByteArray>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
@@ -52,6 +58,7 @@ const char *kOutputDirKey = "output_directory";
 const char *kCliExecutableKey = "cli_executable";
 const char *kCliExtraArgsKey = "cli_extra_args";
 const char *kEnvFileKey = "environment_file";
+const char *kRecordChaptersKey = "record_chapters";
 
 struct process_job {
 	int id = 0;
@@ -124,7 +131,24 @@ QCheckBox *g_game_finished = nullptr;
 /* Stream-relative event timestamps */
 QElapsedTimer g_stream_timer;
 bool g_stream_active = false;
+int g_period_start_logged = -1; /* period number for which we already logged a start */
 QPushButton *g_copy_timestamps_btn = nullptr;
+
+/* Recording chapter markers (OBS 32+, MP4/MOV only for embedded chapters) */
+typedef bool (*add_chapter_fn)(const char *);
+typedef char *(*get_last_recording_fn)(void);
+add_chapter_fn g_add_chapter = nullptr;
+get_last_recording_fn g_get_last_recording = nullptr;
+bool g_chapters_api_available = false;
+bool g_record_chapters_enabled = false;
+bool g_recording_active = false;
+QElapsedTimer g_recording_timer;
+
+struct recording_chapter {
+	int offset_seconds;
+	QString label;
+};
+QVector<recording_chapter> g_recording_chapters;
 
 static const int kNumHotkeys = 31;
 
@@ -522,6 +546,61 @@ void clear_completed_jobs()
 void write_timestamps_file();
 void update_copy_timestamps_visibility();
 
+/* ---- Recording chapter helpers ---- */
+
+void add_recording_chapter(const char *label)
+{
+	if (!g_record_chapters_enabled)
+		return;
+	/* Embed chapter in MP4 via OBS API (if available and recording) */
+	if (g_add_chapter)
+		g_add_chapter(label);
+	/* Track for companion .chapters.txt (works for any format) */
+	if (g_recording_active) {
+		int offset = (int)(g_recording_timer.elapsed() / 1000);
+		g_recording_chapters.append({offset, QString::fromUtf8(label)});
+	}
+}
+
+void add_recording_chapter_delayed(const char *label, int delay_seconds)
+{
+	if (!g_record_chapters_enabled)
+		return;
+	/* MP4 chapter is placed at current PTS (delay cannot be applied) */
+	if (g_add_chapter)
+		g_add_chapter(label);
+	/* Companion file uses the adjusted offset */
+	if (g_recording_active) {
+		int offset = (int)(g_recording_timer.elapsed() / 1000) -
+			     delay_seconds;
+		if (offset < 0)
+			offset = 0;
+		g_recording_chapters.append({offset, QString::fromUtf8(label)});
+	}
+}
+
+void write_recording_chapters_file(const char *recording_path)
+{
+	if (g_recording_chapters.isEmpty())
+		return;
+	QString chapters_path =
+		QString::fromUtf8(recording_path) + ".chapters.txt";
+	QFile file(chapters_path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+		return;
+	QTextStream out(&file);
+	for (const recording_chapter &ch : g_recording_chapters) {
+		int hours = ch.offset_seconds / 3600;
+		int minutes = (ch.offset_seconds % 3600) / 60;
+		int seconds = ch.offset_seconds % 60;
+		out << QString::asprintf("%d:%02d:%02d %s\n", hours, minutes,
+					seconds,
+					ch.label.toUtf8().constData());
+	}
+	log_info("[streamn-obs-scoreboard] wrote " +
+		chapters_path);
+}
+
 int stream_offset_seconds()
 {
 	if (!g_stream_active)
@@ -567,12 +646,18 @@ void remove_last_event(const char *prefix)
 
 void log_period_start_event()
 {
+	int current = scoreboard_get_period();
+	if (current == g_period_start_logged)
+		return;
+	g_period_start_logged = current;
+
 	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
 	char period_buf[64];
 	scoreboard_format_period(period_buf, sizeof(period_buf));
 	snprintf(buf, sizeof(buf), "%s %s Start",
 		 scoreboard_get_segment_name(), period_buf);
 	log_event(buf);
+	add_recording_chapter(buf);
 }
 
 void log_period_end_event()
@@ -583,28 +668,39 @@ void log_period_end_event()
 	snprintf(buf, sizeof(buf), "%s %s End",
 		 scoreboard_get_segment_name(), period_buf);
 	log_event(buf);
+	add_recording_chapter(buf);
 }
 
+/* Must be called AFTER scoreboard_increment_*_score() so the label
+   reflects the score after the goal (e.g. "Goal: Eagles (2-1)").
+   Compare with log_period_end_event() which is called BEFORE
+   scoreboard_period_advance() to capture the current period number. */
 void log_goal_event(bool home)
 {
-	int offset = stream_offset_seconds();
-	if (offset < 0)
+	if (!scoreboard_get_log_scores())
 		return;
-	offset -= kGoalDelaySeconds;
 
+	const char *label = scoreboard_get_score_label();
 	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
-	snprintf(buf, sizeof(buf), "Goal: %s (%d-%d)",
+	snprintf(buf, sizeof(buf), "%s: %s (%d-%d)", label,
 		 home ? scoreboard_get_home_name()
 		      : scoreboard_get_away_name(),
 		 scoreboard_get_home_score(),
 		 scoreboard_get_away_score());
-	log_event_with_offset(buf, offset);
+
+	int offset = stream_offset_seconds();
+	if (offset >= 0)
+		log_event_with_offset(buf, offset - kGoalDelaySeconds);
+	add_recording_chapter_delayed(buf, kGoalDelaySeconds);
 }
 
 void remove_goal_event(bool home)
 {
+	if (!scoreboard_get_log_scores())
+		return;
+	const char *label = scoreboard_get_score_label();
 	char prefix[SCOREBOARD_EVENT_LABEL_SIZE];
-	snprintf(prefix, sizeof(prefix), "Goal: %s",
+	snprintf(prefix, sizeof(prefix), "%s: %s", label,
 		 home ? scoreboard_get_home_name()
 		      : scoreboard_get_away_name());
 	remove_last_event(prefix);
@@ -623,6 +719,7 @@ void log_penalty_event(bool home, int player_number)
 			 home ? scoreboard_get_away_name()
 			      : scoreboard_get_home_name());
 	log_event(buf);
+	add_recording_chapter(buf);
 }
 
 void remove_penalty_event(bool home, int player_number)
@@ -647,6 +744,7 @@ void log_game_end_event()
 		 scoreboard_get_home_name(), scoreboard_get_home_score(),
 		 scoreboard_get_away_name(), scoreboard_get_away_score());
 	log_event(buf);
+	add_recording_chapter(buf);
 }
 
 void write_timestamps_file()
@@ -654,10 +752,9 @@ void write_timestamps_file()
 	const char *dir = scoreboard_get_output_directory();
 	if (dir[0] == '\0')
 		return;
-	char path[1024];
+	char path[544]; /* 512 (max output dir) + 32 (filename) */
 	snprintf(path, sizeof(path), "%s/timestamps.txt", dir);
-	if (scoreboard_event_log_write(path))
-		log_info("[streamn-obs-scoreboard] wrote timestamps.txt");
+	scoreboard_event_log_write(path);
 }
 
 void update_copy_timestamps_visibility()
@@ -669,6 +766,11 @@ void update_copy_timestamps_visibility()
 
 void run_reeln_segment_command()
 {
+	/* Only run the CLI when OBS is actively streaming/recording —
+	   the segment command needs replay files which only exist
+	   during a live session. */
+	if (!g_stream_active)
+		return;
 	const QString executable =
 		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
 	if (executable.isEmpty())
@@ -988,6 +1090,8 @@ void load_profile_paths()
 					     kCliExtraArgsKey);
 		env_file = config_get_string(profile_cfg, kConfigSection,
 					     kEnvFileKey);
+		g_record_chapters_enabled = config_get_bool(
+			profile_cfg, kConfigSection, kRecordChaptersKey);
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -1010,6 +1114,8 @@ void save_profile_paths()
 			  scoreboard_get_cli_extra_args());
 	config_set_string(profile_cfg, kConfigSection, kEnvFileKey,
 			  g_environment_file.toUtf8().constData());
+	config_set_bool(profile_cfg, kConfigSection, kRecordChaptersKey,
+			g_record_chapters_enabled);
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1287,6 +1393,32 @@ void open_clock_settings_dialog(QWidget *parent)
 					 env_file_input->setText(path);
 			 });
 
+	QFrame *sep2 = new QFrame(&dialog);
+	sep2->setFrameShape(QFrame::HLine);
+	sep2->setFrameShadow(QFrame::Sunken);
+	layout->addWidget(sep2);
+
+	QCheckBox *chapters_check =
+		new QCheckBox("Record chapters in game file", &dialog);
+	chapters_check->setChecked(g_record_chapters_enabled);
+	if (g_chapters_api_available) {
+		chapters_check->setToolTip(
+			"Writes a .chapters.txt file next to each recording "
+			"with game event timestamps for reeln-cli.\n\n"
+			"Also embeds chapter markers into MP4/MOV recordings "
+			"when using Hybrid MP4 output (OBS Settings > Output "
+			"> Recording Format > Hybrid MP4).\n"
+			"Standard (FFmpeg) and MKV outputs use the companion "
+			"file only.");
+	} else {
+		chapters_check->setToolTip(
+			"Writes a .chapters.txt file next to each recording "
+			"with game event timestamps for reeln-cli.\n\n"
+			"Embedded MP4 chapters require OBS 32+ with Hybrid "
+			"MP4 output format.");
+	}
+	layout->addWidget(chapters_check);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1312,6 +1444,7 @@ void open_clock_settings_dialog(QWidget *parent)
 		scoreboard_set_cli_extra_args(
 			cli_args_input->text().trimmed().toUtf8().constData());
 		g_environment_file = env_file_input->text().trimmed();
+		g_record_chapters_enabled = chapters_check->isChecked();
 		save_profile_paths();
 		scoreboard_clock_reset();
 		update_all_labels();
@@ -1506,9 +1639,10 @@ void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (!pressed)
 		return;
-	scoreboard_home_penalty_add(
+	int slot = scoreboard_home_penalty_add(
 		0, scoreboard_get_default_penalty_duration());
-	log_penalty_event(true, 0);
+	if (slot >= 0)
+		log_penalty_event(true, 0);
 }
 
 void hk_home_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1535,9 +1669,10 @@ void hk_away_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (!pressed)
 		return;
-	scoreboard_away_penalty_add(
+	int slot = scoreboard_away_penalty_add(
 		0, scoreboard_get_default_penalty_duration());
-	log_penalty_event(false, 0);
+	if (slot >= 0)
+		log_penalty_event(false, 0);
 }
 
 void hk_away_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1775,9 +1910,13 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		update_all_labels();
 		update_highlights_button_visibility();
 	}
+	/* OBS frontend events and Qt button/hotkey callbacks all run on the
+	   main (Qt) thread, so g_stream_active and g_stream_timer are safe
+	   to access without additional synchronization. */
 	if (event == OBS_FRONTEND_EVENT_STREAMING_STARTED) {
 		g_stream_timer.start();
 		g_stream_active = true;
+		g_period_start_logged = -1;
 		scoreboard_event_log_clear();
 		log_event("Stream Start");
 		log_info("[streamn-obs-scoreboard] streaming started — "
@@ -1789,6 +1928,25 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		update_copy_timestamps_visibility();
 		log_info("[streamn-obs-scoreboard] streaming stopped — "
 			 "timestamps written");
+	}
+	if (event == OBS_FRONTEND_EVENT_RECORDING_STARTED) {
+		g_recording_active = true;
+		g_recording_timer.start();
+		g_recording_chapters.clear();
+		add_recording_chapter("Recording Start");
+		log_info("[streamn-obs-scoreboard] recording started — "
+			 "chapter tracking enabled");
+	}
+	if (event == OBS_FRONTEND_EVENT_RECORDING_STOPPED) {
+		g_recording_active = false;
+		if (g_record_chapters_enabled && g_get_last_recording) {
+			char *path = g_get_last_recording();
+			if (path) {
+				write_recording_chapters_file(path);
+				bfree(path);
+			}
+		}
+		g_recording_chapters.clear();
 	}
 }
 } // namespace
@@ -1802,6 +1960,32 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	scoreboard_reset_state_for_tests();
 	load_profile_paths();
 	scoreboard_read_all_files();
+
+	/* Detect OBS 32+ recording chapter API at runtime for backwards
+	   compatibility.  These symbols only exist in obs-frontend-api 32+. */
+#ifdef _WIN32
+	HMODULE frontend_mod = GetModuleHandleA("obs-frontend-api");
+	if (frontend_mod) {
+		g_add_chapter = (add_chapter_fn)GetProcAddress(
+			frontend_mod, "obs_frontend_recording_add_chapter");
+		g_get_last_recording =
+			(get_last_recording_fn)GetProcAddress(
+				frontend_mod,
+				"obs_frontend_get_last_recording");
+	}
+#else
+	g_add_chapter = (add_chapter_fn)dlsym(
+		RTLD_DEFAULT, "obs_frontend_recording_add_chapter");
+	g_get_last_recording = (get_last_recording_fn)dlsym(
+		RTLD_DEFAULT, "obs_frontend_get_last_recording");
+#endif
+	g_chapters_api_available = (g_add_chapter != nullptr);
+	if (g_chapters_api_available)
+		log_info("[streamn-obs-scoreboard] recording chapter API "
+			 "available (OBS 32+)");
+	else
+		log_info("[streamn-obs-scoreboard] recording chapter API "
+			 "not found — chapter features disabled");
 
 	QWidget *widget = new QWidget();
 	widget->setStyleSheet(
@@ -2210,7 +2394,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	g_queue_scroll->setWidgetResizable(true);
 	g_queue_scroll->setWidget(g_queue_container);
 	g_queue_scroll->setFrameShape(QFrame::NoFrame);
-	g_queue_scroll->setMinimumHeight(80);
 	g_queue_scroll->setVisible(false);
 	root->addWidget(g_queue_scroll, 1);
 
@@ -2401,6 +2584,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 			 [widget]() { open_clock_settings_dialog(widget); });
 	QObject::connect(new_game_action, &QAction::triggered, []() {
 		scoreboard_new_game();
+		g_period_start_logged = -1;
 		scoreboard_event_log_clear();
 		update_copy_timestamps_visibility();
 		update_all_labels();
@@ -2465,6 +2649,9 @@ void scoreboard_dock_shutdown(void)
 	g_game_finished = nullptr;
 	g_copy_timestamps_btn = nullptr;
 	g_stream_active = false;
+	g_period_start_logged = -1;
+	g_recording_active = false;
+	g_recording_chapters.clear();
 
 	for (process_job *job : g_jobs) {
 		if (!job)
