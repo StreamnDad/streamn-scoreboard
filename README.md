@@ -19,6 +19,8 @@ OBS Studio plugin that tracks live game scoreboard state and writes it to indivi
 - **Penalty tracking** with automatic countdown timers (hockey, lacrosse, rugby)
 - **Foul/card counters** for basketball, soccer, and football
 - **reeln-cli integration** for automated highlight generation
+- **Game event timestamps** — YouTube chapter markers copied to clipboard for livestream descriptions
+- **Recording chapter markers** — game events written to a `.chapters.txt` companion file next to each recording; also embedded directly into Hybrid MP4/MOV recordings on OBS 32+
 
 Build your own scorebug overlay using OBS Text sources pointed at the output files:
 
@@ -26,7 +28,7 @@ Build your own scorebug overlay using OBS Text sources pointed at the output fil
 
 ## Compatibility
 
-- **OBS Studio** 30.0+ (Qt5/Qt6)
+- **OBS Studio** 30.0+ (Qt5/Qt6); embedded recording chapters require OBS 32+ with Hybrid MP4 output
 - **macOS** (Apple Silicon and Intel)
 - **Windows** (x64)
 - **Linux** (x86_64)
@@ -152,6 +154,48 @@ All 31 hotkeys are prefixed with "Streamn:" in OBS Settings > Hotkeys:
 | Generate Highlights | Trigger reeln-cli highlight generation |
 | Home/Away Foul +/- | Adjust foul counter (4 hotkeys) |
 | Home/Away Foul2 +/- | Adjust second foul counter (4 hotkeys) |
+
+## Game Event Timestamps & Recording Chapters
+
+The plugin automatically tracks game events (goals, penalties, period changes) with timestamps relative to your stream or recording start time.
+
+### Livestream Timestamps (YouTube Chapters)
+
+When OBS is streaming, events are logged with stream-relative timestamps. Click **Copy Timestamps to Clipboard** in the dock to paste them into your YouTube video description as chapter markers:
+
+```
+0:00:00 Stream Start
+0:12:34 Period 1 Start
+0:15:22 Goal: Eagles (1-0)
+0:23:45 Power Play: Hawks #12
+0:35:10 Period 1 End
+```
+
+A `timestamps.txt` file is also written to your output directory after every event.
+
+### Recording Chapters
+
+Enable **"Record chapters in game file"** in Game Settings to track events in your local recordings:
+
+- **Companion file**: A `.chapters.txt` file is written next to every recording (e.g., `2026-03-12_15-30-00.mp4.chapters.txt`). This works with any recording format (MKV, MP4, MOV) and can be used by reeln-cli or with ffmpeg to inject chapters.
+- **Embedded MP4 chapters**: On OBS 32+, chapters are also embedded directly into the recording file — but **only** when using the **Hybrid MP4** recording format. Standard (FFmpeg) output and MKV do not support embedded chapters. To enable: OBS Settings > Output > Recording > Recording Format > **Hybrid MP4**.
+
+Recording chapters are tracked independently of streaming, so they work when you're only recording locally without a livestream.
+
+### Sport-Aware Score Events
+
+Score events use sport-specific labels:
+
+| Sport | Label | Logged by default |
+|-------|-------|-------------------|
+| Hockey | Goal | Yes |
+| Soccer | Goal | Yes |
+| Lacrosse | Goal | Yes |
+| Rugby | Try | Yes |
+| Basketball | Score | No (too frequent) |
+| Football | Score | No (too frequent) |
+
+Period, penalty, and game-end events are always logged regardless of sport.
 
 ## Development
 

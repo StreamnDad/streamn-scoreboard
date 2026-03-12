@@ -14,13 +14,13 @@
 #define SCOREBOARD_SEGMENT_NAME_SIZE 16
 
 static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COUNT] = {
-	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      ""},
-	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", ""},
-	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC"},
-	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", ""},
-	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      ""},
-	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      ""},
-	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      ""},
+	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal"},
+	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score"},
+	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal"},
+	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score"},
+	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal"},
+	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try"},
+	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score"},
 };
 
 static struct {
@@ -54,6 +54,8 @@ static struct {
 	int home_fouls2;
 	int away_fouls2;
 	char foul_label2[16];
+	bool log_scores;
+	char score_label[16];
 
 	struct scoreboard_penalty home_penalties[SCOREBOARD_PENALTY_SLOTS];
 	struct scoreboard_penalty away_penalties[SCOREBOARD_PENALTY_SLOTS];
@@ -72,6 +74,11 @@ static struct {
 } g_state;
 
 static bool g_dirty;
+
+/* ---- game event log ---- */
+static struct scoreboard_game_event
+	g_event_log[SCOREBOARD_MAX_EVENTS];
+static int g_event_count;
 
 /* ---- helpers ---- */
 
@@ -310,6 +317,8 @@ void scoreboard_reset_state_for_tests(void)
 {
 	memset(&g_state, 0, sizeof(g_state));
 	g_dirty = false;
+	g_event_count = 0;
+	memset(g_event_log, 0, sizeof(g_event_log));
 	g_state.period = 1;
 	g_state.period_length = SCOREBOARD_DEFAULT_PERIOD_LENGTH;
 	g_state.clock_direction = SCOREBOARD_CLOCK_COUNT_DOWN;
@@ -330,6 +339,8 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.has_fouls = false;
 	g_state.foul_label[0] = '\0';
 	g_state.foul_label2[0] = '\0';
+	g_state.log_scores = true;
+	safe_copy(g_state.score_label, "Goal", sizeof(g_state.score_label));
 }
 
 /* ---- clock ---- */
@@ -368,13 +379,17 @@ void scoreboard_clock_tick(int elapsed_tenths)
 
 	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN) {
 		g_state.clock_tenths -= elapsed_tenths;
-		if (g_state.clock_tenths < 0)
+		if (g_state.clock_tenths <= 0) {
 			g_state.clock_tenths = 0;
+			g_state.clock_running = false;
+		}
 	} else {
 		g_state.clock_tenths += elapsed_tenths;
 		int max_tenths = g_state.period_length * 10;
-		if (g_state.clock_tenths > max_tenths)
+		if (g_state.clock_tenths >= max_tenths) {
 			g_state.clock_tenths = max_tenths;
+			g_state.clock_running = false;
+		}
 	}
 
 	mark_dirty();
@@ -1379,6 +1394,9 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 		  sizeof(g_state.foul_label));
 	safe_copy(g_state.foul_label2, p->foul_label2,
 		  sizeof(g_state.foul_label2));
+	g_state.log_scores = p->log_scores;
+	safe_copy(g_state.score_label, p->score_label,
+		  sizeof(g_state.score_label));
 	if (p->duration_seconds > 0)
 		g_state.period_length = p->duration_seconds;
 	g_state.clock_direction = p->default_direction;
@@ -1448,6 +1466,16 @@ const char *scoreboard_get_foul_label2(void)
 	return g_state.foul_label2;
 }
 
+bool scoreboard_get_log_scores(void)
+{
+	return g_state.log_scores;
+}
+
+const char *scoreboard_get_score_label(void)
+{
+	return g_state.score_label;
+}
+
 /* ---- action log ---- */
 
 void scoreboard_add_action_log(const char *message)
@@ -1489,4 +1517,83 @@ size_t scoreboard_copy_action_logs(char *buffer, size_t buffer_size)
 	}
 
 	return written;
+}
+
+/* ---- game event log ---- */
+
+void scoreboard_event_log_clear(void)
+{
+	g_event_count = 0;
+}
+
+int scoreboard_event_log_add(int offset_seconds, const char *label)
+{
+	if (g_event_count >= SCOREBOARD_MAX_EVENTS)
+		return -1;
+	if (label == NULL)
+		return -1;
+	if (offset_seconds < 0)
+		offset_seconds = 0;
+	int idx = g_event_count;
+	g_event_log[idx].offset_seconds = offset_seconds;
+	safe_copy(g_event_log[idx].label, label, SCOREBOARD_EVENT_LABEL_SIZE);
+	g_event_count++;
+	return idx;
+}
+
+bool scoreboard_event_log_remove(int index)
+{
+	if (index < 0 || index >= g_event_count)
+		return false;
+	for (int i = index; i < g_event_count - 1; i++)
+		g_event_log[i] = g_event_log[i + 1];
+	g_event_count--;
+	return true;
+}
+
+int scoreboard_event_log_find_last(const char *prefix)
+{
+	if (prefix == NULL)
+		return -1;
+	size_t len = strlen(prefix);
+	if (len == 0)
+		return -1;
+	for (int i = g_event_count - 1; i >= 0; i--) {
+		if (strncmp(g_event_log[i].label, prefix, len) == 0)
+			return i;
+	}
+	return -1;
+}
+
+int scoreboard_event_log_count(void)
+{
+	return g_event_count;
+}
+
+const struct scoreboard_game_event *scoreboard_event_log_get(int index)
+{
+	if (index < 0 || index >= g_event_count)
+		return NULL;
+	return &g_event_log[index];
+}
+
+bool scoreboard_event_log_write(const char *path)
+{
+	if (path == NULL)
+		return false;
+	FILE *f = fopen(path, "w");
+	if (f == NULL)
+		return false;
+
+	for (int i = 0; i < g_event_count; i++) {
+		int total = g_event_log[i].offset_seconds;
+		int hours = total / 3600;
+		int minutes = (total % 3600) / 60;
+		int seconds = total % 60;
+		fprintf(f, "%d:%02d:%02d %s\n", hours, minutes, seconds,
+			g_event_log[i].label);
+	}
+
+	fclose(f);
+	return true;
 }

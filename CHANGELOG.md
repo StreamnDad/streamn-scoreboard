@@ -4,6 +4,26 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-11
+
+### Added
+- Game event timestamps for YouTube chapter markers — automatically logs goals, penalties, period changes, and game end events with stream-relative timestamps
+- "Copy Timestamps to Clipboard" button for pasting chapter markers into YouTube descriptions
+- `timestamps.txt` output file written incrementally after every event
+- Event removal support: decrementing a score or clearing a penalty removes the corresponding timestamp entry
+- Goal timestamps subtract a 10-second delay offset to better align with the actual moment
+- Power Play labels on penalty events showing which team has the advantage
+- Recording chapter markers — embeds chapters into Hybrid MP4/MOV recordings via OBS 32+ API when enabled (requires Hybrid MP4 output format, not Standard/FFmpeg)
+- Companion `.chapters.txt` file written next to any recording (MP4 or MKV) for reeln-cli integration or manual ffmpeg chapter injection
+- "Record chapters in game file" checkbox in Game Settings with tooltip showing API availability
+- Sport-aware score labels in timestamps: "Goal" for hockey/soccer/lacrosse, "Try" for rugby; score logging disabled by default for basketball and football (too frequent)
+- Clock auto-stop when it reaches 0:00 (count-down) or period length (count-up)
+- Scrollable dock layout — process queue no longer pushes scoreboard controls out of view
+
+### Changed
+- Segment CLI command (`reeln game segment`) only runs when OBS is actively streaming — no more spurious failures during offline testing
+- Process queue section now uses remaining dock space and scrolls internally instead of growing unbounded
+
 ## [0.3.1] - 2026-03-03
 
 ### Changed
