@@ -409,6 +409,240 @@ static void test_event_log_find_last_empty_prefix(void)
 	assert(scoreboard_event_log_find_last("") == -1);
 }
 
+static void test_event_log_file_has_content(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_hc.txt", g_tmp_dir);
+
+	/* Write a file with content */
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "0:00:00 Stream Start\n");
+	fclose(f);
+
+	assert(scoreboard_event_log_file_has_content(path));
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_file_has_content_empty(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_empty_hc.txt", g_tmp_dir);
+
+	/* Write an empty file */
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fclose(f);
+
+	assert(!scoreboard_event_log_file_has_content(path));
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_file_has_content_missing(void)
+{
+	assert(!scoreboard_event_log_file_has_content(
+		"/nonexistent/path/timestamps.txt"));
+}
+
+static void test_event_log_file_has_content_null(void)
+{
+	assert(!scoreboard_event_log_file_has_content(NULL));
+}
+
+static void test_event_log_read_basic(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	/* Add events and write them out */
+	scoreboard_event_log_add(0, "Stream Start");
+	scoreboard_event_log_add(754, "Period 1 Start");
+	scoreboard_event_log_add(3661, "Goal: Eagles (1-0)");
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_read.txt", g_tmp_dir);
+	assert(scoreboard_event_log_write(path));
+
+	/* Clear and read back */
+	scoreboard_event_log_clear();
+	assert(scoreboard_event_log_count() == 0);
+
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 3);
+	assert(scoreboard_event_log_count() == 3);
+
+	const struct scoreboard_game_event *ev = scoreboard_event_log_get(0);
+	assert(ev->offset_seconds == 0);
+	assert(strcmp(ev->label, "Stream Start") == 0);
+
+	ev = scoreboard_event_log_get(1);
+	assert(ev->offset_seconds == 754);
+	assert(strcmp(ev->label, "Period 1 Start") == 0);
+
+	ev = scoreboard_event_log_get(2);
+	assert(ev->offset_seconds == 3661);
+	assert(strcmp(ev->label, "Goal: Eagles (1-0)") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_read_empty_file(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_read_empty.txt", g_tmp_dir);
+
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fclose(f);
+
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 0);
+	assert(scoreboard_event_log_count() == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_read_bad_path(void)
+{
+	scoreboard_reset_state_for_tests();
+	int loaded = scoreboard_event_log_read("/nonexistent/dir/file.txt");
+	assert(loaded == -1);
+}
+
+static void test_event_log_read_null_path(void)
+{
+	scoreboard_reset_state_for_tests();
+	int loaded = scoreboard_event_log_read(NULL);
+	assert(loaded == -1);
+}
+
+static void test_event_log_read_malformed_lines(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_malformed.txt", g_tmp_dir);
+
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "0:00:00 Stream Start\n");
+	fprintf(f, "this is not a valid line\n");
+	fprintf(f, "\n");
+	fprintf(f, "0:12:34 Period 1 Start\n");
+	fprintf(f, "abc:de:fg Bad Time\n");
+	fclose(f);
+
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 2);
+	assert(scoreboard_event_log_count() == 2);
+
+	const struct scoreboard_game_event *ev = scoreboard_event_log_get(0);
+	assert(strcmp(ev->label, "Stream Start") == 0);
+	ev = scoreboard_event_log_get(1);
+	assert(strcmp(ev->label, "Period 1 Start") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_read_preserves_existing(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	/* Add an event in memory first */
+	scoreboard_event_log_add(0, "Existing Event");
+	assert(scoreboard_event_log_count() == 1);
+
+	/* Write a file with different events */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_preserve.txt", g_tmp_dir);
+
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "0:05:00 File Event 1\n");
+	fprintf(f, "0:10:00 File Event 2\n");
+	fclose(f);
+
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 2);
+	assert(scoreboard_event_log_count() == 3);
+
+	/* Original event still first */
+	assert(strcmp(scoreboard_event_log_get(0)->label,
+		     "Existing Event") == 0);
+	assert(strcmp(scoreboard_event_log_get(1)->label,
+		     "File Event 1") == 0);
+	assert(strcmp(scoreboard_event_log_get(2)->label,
+		     "File Event 2") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_read_empty_label(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_emptylabel.txt", g_tmp_dir);
+
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	/* Line with timestamp but no label after the space */
+	fprintf(f, "0:00:00 \n");
+	fprintf(f, "0:01:00 Valid Event\n");
+	fclose(f);
+
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 1);
+	assert(scoreboard_event_log_count() == 1);
+	assert(strcmp(scoreboard_event_log_get(0)->label, "Valid Event") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_event_log_read_capacity_limit(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	/* Fill event log to capacity */
+	for (int i = 0; i < SCOREBOARD_MAX_EVENTS; i++) {
+		char label[32];
+		snprintf(label, sizeof(label), "Event %d", i);
+		scoreboard_event_log_add(i, label);
+	}
+	assert(scoreboard_event_log_count() == SCOREBOARD_MAX_EVENTS);
+
+	/* Write a file with one more event */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/timestamps_cap.txt", g_tmp_dir);
+
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "0:00:00 Overflow Event\n");
+	fclose(f);
+
+	/* Read should stop at capacity */
+	int loaded = scoreboard_event_log_read(path);
+	assert(loaded == 0);
+	assert(scoreboard_event_log_count() == SCOREBOARD_MAX_EVENTS);
+
+	cleanup_tmp_dir();
+}
+
 static void test_event_log_find_and_remove(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -472,6 +706,18 @@ int main(void)
 	test_event_log_find_last_empty_log();
 	test_event_log_find_last_empty_prefix();
 	test_event_log_find_and_remove();
+	test_event_log_file_has_content();
+	test_event_log_file_has_content_empty();
+	test_event_log_file_has_content_missing();
+	test_event_log_file_has_content_null();
+	test_event_log_read_basic();
+	test_event_log_read_empty_file();
+	test_event_log_read_bad_path();
+	test_event_log_read_null_path();
+	test_event_log_read_malformed_lines();
+	test_event_log_read_preserves_existing();
+	test_event_log_read_empty_label();
+	test_event_log_read_capacity_limit();
 	printf("All event log tests passed!\n");
 	return 0;
 }

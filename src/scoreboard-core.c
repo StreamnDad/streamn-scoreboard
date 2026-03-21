@@ -1597,3 +1597,55 @@ bool scoreboard_event_log_write(const char *path)
 	fclose(f);
 	return true;
 }
+
+bool scoreboard_event_log_file_has_content(const char *path)
+{
+	if (path == NULL)
+		return false;
+	FILE *f = fopen(path, "r");
+	if (f == NULL)
+		return false;
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fclose(f);
+	return size > 0;
+}
+
+int scoreboard_event_log_read(const char *path)
+{
+	if (path == NULL)
+		return -1;
+	FILE *f = fopen(path, "r");
+	if (f == NULL)
+		return -1;
+
+	int loaded = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), f) != NULL) {
+		/* Strip trailing newline */
+		size_t len = strlen(line);
+		if (len > 0 && line[len - 1] == '\n')
+			line[len - 1] = '\0';
+
+		/* Parse "H:MM:SS label" format */
+		int hours = 0, minutes = 0, seconds = 0;
+		int consumed = 0;
+		if (sscanf(line, "%d:%d:%d %n", &hours, &minutes, &seconds,
+			   &consumed) < 3 ||
+		    consumed == 0) {
+			continue; /* skip malformed lines */
+		}
+
+		const char *label = line + consumed;
+		if (label[0] == '\0')
+			continue;
+
+		int offset = hours * 3600 + minutes * 60 + seconds;
+		if (scoreboard_event_log_add(offset, label) < 0)
+			break; /* capacity reached */
+		loaded++;
+	}
+
+	fclose(f);
+	return loaded;
+}

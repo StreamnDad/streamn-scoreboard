@@ -216,6 +216,8 @@ int scoreboard_event_log_find_last(const char *prefix);
 int scoreboard_event_log_count(void);
 const struct scoreboard_game_event *scoreboard_event_log_get(int index);
 bool scoreboard_event_log_write(const char *path);
+bool scoreboard_event_log_file_has_content(const char *path);
+int scoreboard_event_log_read(const char *path);
 
 #ifdef __cplusplus
 }
