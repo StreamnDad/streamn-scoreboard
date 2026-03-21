@@ -40,6 +40,7 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
@@ -747,30 +748,42 @@ void log_game_end_event()
 	add_recording_chapter(buf);
 }
 
-void write_timestamps_file()
+bool timestamps_file_path(char *buf, size_t size)
 {
 	const char *dir = scoreboard_get_output_directory();
 	if (dir[0] == '\0')
-		return;
+		return false;
+	snprintf(buf, size, "%s/timestamps.txt", dir);
+	return true;
+}
+
+void write_timestamps_file()
+{
 	char path[544]; /* 512 (max output dir) + 32 (filename) */
-	snprintf(path, sizeof(path), "%s/timestamps.txt", dir);
+	if (!timestamps_file_path(path, sizeof(path)))
+		return;
 	scoreboard_event_log_write(path);
 }
 
 void update_copy_timestamps_visibility()
 {
-	if (g_copy_timestamps_btn)
-		g_copy_timestamps_btn->setVisible(
-			scoreboard_event_log_count() > 0);
+	if (!g_copy_timestamps_btn)
+		return;
+	if (scoreboard_event_log_count() > 0) {
+		g_copy_timestamps_btn->setVisible(true);
+		return;
+	}
+	char path[544];
+	if (timestamps_file_path(path, sizeof(path)) &&
+	    scoreboard_event_log_file_has_content(path)) {
+		g_copy_timestamps_btn->setVisible(true);
+		return;
+	}
+	g_copy_timestamps_btn->setVisible(false);
 }
 
 void run_reeln_segment_command()
 {
-	/* Only run the CLI when OBS is actively streaming/recording —
-	   the segment command needs replay files which only exist
-	   during a live session. */
-	if (!g_stream_active)
-		return;
 	const QString executable =
 		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
 	if (executable.isEmpty())
@@ -1909,6 +1922,7 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		rebuild_file_watcher();
 		update_all_labels();
 		update_highlights_button_visibility();
+		update_copy_timestamps_visibility();
 	}
 	/* OBS frontend events and Qt button/hotkey callbacks all run on the
 	   main (Qt) thread, so g_stream_active and g_stream_timer are safe
@@ -1917,8 +1931,46 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		g_stream_timer.start();
 		g_stream_active = true;
 		g_period_start_logged = -1;
-		scoreboard_event_log_clear();
-		log_event("Stream Start");
+
+		char ts_path[544];
+		bool has_prev = timestamps_file_path(ts_path, sizeof(ts_path)) &&
+				scoreboard_event_log_file_has_content(ts_path);
+
+		if (has_prev) {
+			/* Defer dialog so we don't block the OBS frontend
+			   event callback */
+			QString saved_path = QString::fromUtf8(ts_path);
+			QTimer::singleShot(0, [saved_path]() {
+				QMessageBox box(g_dock_widget);
+				box.setWindowTitle("Previous Timestamps");
+				box.setText(
+					"Timestamps from a previous game exist.\n"
+					"Start fresh or keep them?");
+				box.setIcon(QMessageBox::Question);
+				QPushButton *fresh = box.addButton(
+					"Start Fresh",
+					QMessageBox::AcceptRole);
+				box.addButton("Keep",
+					      QMessageBox::RejectRole);
+				box.setDefaultButton(fresh);
+				box.exec();
+
+				if (box.clickedButton() == fresh) {
+					scoreboard_event_log_clear();
+					log_event("Stream Start");
+				} else {
+					scoreboard_event_log_read(
+						saved_path.toUtf8()
+							.constData());
+				}
+				update_copy_timestamps_visibility();
+			});
+		} else {
+			scoreboard_event_log_clear();
+			log_event("Stream Start");
+			update_copy_timestamps_visibility();
+		}
+
 		log_info("[streamn-obs-scoreboard] streaming started — "
 			 "event timestamps enabled");
 	}
@@ -2553,27 +2605,42 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(g_game_finished, &QCheckBox::toggled,
 			 []() { update_all_labels(); });
 	QObject::connect(g_copy_timestamps_btn, &QPushButton::clicked, []() {
-		/* Build YouTube chapters text from event log */
 		QString text;
 		int count = scoreboard_event_log_count();
-		for (int i = 0; i < count; i++) {
-			const struct scoreboard_game_event *ev =
-				scoreboard_event_log_get(i);
-			if (!ev)
-				continue;
-			int total = ev->offset_seconds;
-			int hours = total / 3600;
-			int minutes = (total % 3600) / 60;
-			int seconds = total % 60;
-			if (!text.isEmpty())
-				text += "\n";
-			text += QString::asprintf("%d:%02d:%02d %s", hours,
-						  minutes, seconds,
-						  ev->label);
+		if (count > 0) {
+			/* Build from in-memory event log */
+			for (int i = 0; i < count; i++) {
+				const struct scoreboard_game_event *ev =
+					scoreboard_event_log_get(i);
+				if (!ev)
+					continue;
+				int total = ev->offset_seconds;
+				int hours = total / 3600;
+				int minutes = (total % 3600) / 60;
+				int seconds = total % 60;
+				if (!text.isEmpty())
+					text += "\n";
+				text += QString::asprintf(
+					"%d:%02d:%02d %s", hours, minutes,
+					seconds, ev->label);
+			}
+		} else {
+			/* Fall back to timestamps.txt on disk */
+			char path[544];
+			if (timestamps_file_path(path, sizeof(path))) {
+				QFile file(QString::fromUtf8(path));
+				if (file.open(QIODevice::ReadOnly |
+					      QIODevice::Text))
+					text = QString::fromUtf8(
+						       file.readAll())
+						       .trimmed();
+			}
 		}
-		QGuiApplication::clipboard()->setText(text);
-		log_info("[streamn-obs-scoreboard] timestamps copied to "
-			 "clipboard");
+		if (!text.isEmpty()) {
+			QGuiApplication::clipboard()->setText(text);
+			log_info("[streamn-obs-scoreboard] timestamps "
+				 "copied to clipboard");
+		}
 	});
 	/* Penalty clear buttons are connected dynamically in update_all_labels */
 
@@ -2586,6 +2653,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		scoreboard_new_game();
 		g_period_start_logged = -1;
 		scoreboard_event_log_clear();
+		write_timestamps_file();
 		update_copy_timestamps_visibility();
 		update_all_labels();
 	});

@@ -4,6 +4,16 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-03-21
+
+### Fixed
+- "Copy Timestamps to Clipboard" button now remains visible after OBS restarts or stream stops, as long as `timestamps.txt` exists on disk
+- reeln-cli commands (segment highlights, game highlights) now fire regardless of streaming state — previously the button did nothing when not actively streaming
+
+### Changed
+- New Game clears `timestamps.txt` and hides the copy button
+- Stream start warns if previous game timestamps exist, with option to keep or start fresh
+
 ## [0.4.0] - 2026-03-11
 
 ### Added
