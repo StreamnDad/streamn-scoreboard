@@ -10,17 +10,19 @@
 #define SCOREBOARD_ACTION_LOG_ENTRY_SIZE 160
 #define SCOREBOARD_DEFAULT_PERIOD_LENGTH 900
 #define SCOREBOARD_DEFAULT_PENALTY_DURATION 120
+#define SCOREBOARD_DEFAULT_MAJOR_PENALTY_DURATION 300
 #define SCOREBOARD_PENALTY_SLOTS SCOREBOARD_MAX_PENALTIES
 #define SCOREBOARD_SEGMENT_NAME_SIZE 16
 
 static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COUNT] = {
-	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal"},
-	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score"},
-	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal"},
-	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score"},
-	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal"},
-	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try"},
-	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score"},
+	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs */
+	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300},
+	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0},
+	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0},
+	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0},
+	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180},
+	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600},
+	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300},
 };
 
 static struct {
@@ -32,6 +34,7 @@ static struct {
 	int period;
 	bool overtime_enabled;
 	int default_penalty_duration;
+	int default_major_penalty_duration;
 
 	enum scoreboard_sport sport;
 	char segment_name[SCOREBOARD_SEGMENT_NAME_SIZE];
@@ -40,6 +43,10 @@ static struct {
 	bool has_shots;
 	bool has_penalties;
 
+	char period_labels[SCOREBOARD_MAX_PERIOD_LABELS]
+			  [SCOREBOARD_PERIOD_LABEL_SIZE];
+	int period_label_count;
+
 	char home_name[SCOREBOARD_MAX_NAME];
 	char away_name[SCOREBOARD_MAX_NAME];
 
@@ -47,6 +54,9 @@ static struct {
 	int away_score;
 	int home_shots;
 	int away_shots;
+	int home_faceoffs;
+	int away_faceoffs;
+	bool has_faceoffs;
 	int home_fouls;
 	int away_fouls;
 	bool has_fouls;
@@ -116,6 +126,8 @@ static void log_message(enum scoreboard_log_level level, const char *msg)
 		g_state.log_fn(level, msg);
 }
 
+static void generate_default_period_labels(void);
+
 static bool read_text_file(const char *dir, const char *filename, char *buf,
 			   size_t buf_size)
 {
@@ -145,14 +157,15 @@ static int parse_clock_text(const char *text)
 
 static int parse_period_text(const char *text)
 {
-	int sc = g_state.segment_count;
-	if (strcmp(text, "OT") == 0)
-		return sc + 1;
-	int ot_num = 0;
-	if (sscanf(text, "OT%d", &ot_num) == 1 && ot_num >= 2)
-		return sc + ot_num;
+	/* Search labels array for an exact match */
+	for (int i = 0; i < g_state.period_label_count; i++) {
+		if (strcmp(text, g_state.period_labels[i]) == 0)
+			return i + 1;
+	}
+	/* Fallback: try parsing as a number */
 	int p = 0;
-	if (sscanf(text, "%d", &p) == 1 && p >= 1 && p <= sc)
+	if (sscanf(text, "%d", &p) == 1 && p >= 1 &&
+	    p <= g_state.period_label_count)
 		return p;
 	return -1;
 }
@@ -325,6 +338,8 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.clock_tenths = SCOREBOARD_DEFAULT_PERIOD_LENGTH * 10;
 	g_state.overtime_enabled = true;
 	g_state.default_penalty_duration = SCOREBOARD_DEFAULT_PENALTY_DURATION;
+	g_state.default_major_penalty_duration =
+		SCOREBOARD_DEFAULT_MAJOR_PENALTY_DURATION;
 	safe_copy(g_state.home_name, "Home", sizeof(g_state.home_name));
 	safe_copy(g_state.away_name, "Away", sizeof(g_state.away_name));
 
@@ -335,12 +350,14 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.segment_count = 3;
 	g_state.ot_max = 4;
 	g_state.has_shots = true;
+	g_state.has_faceoffs = true;
 	g_state.has_penalties = true;
 	g_state.has_fouls = false;
 	g_state.foul_label[0] = '\0';
 	g_state.foul_label2[0] = '\0';
 	g_state.log_scores = true;
 	safe_copy(g_state.score_label, "Goal", sizeof(g_state.score_label));
+	generate_default_period_labels();
 }
 
 /* ---- clock ---- */
@@ -393,7 +410,8 @@ void scoreboard_clock_tick(int elapsed_tenths)
 	}
 
 	mark_dirty();
-	scoreboard_penalty_tick(elapsed_tenths);
+	if (g_state.clock_running)
+		scoreboard_penalty_tick(elapsed_tenths);
 }
 
 int scoreboard_clock_get_tenths(void)
@@ -472,21 +490,15 @@ void scoreboard_set_period(int period)
 {
 	if (period < 1)
 		period = 1;
-	int max_period = g_state.overtime_enabled
-				 ? g_state.segment_count + g_state.ot_max
-				 : g_state.segment_count;
-	if (period > max_period)
-		period = max_period;
+	if (period > g_state.period_label_count)
+		period = g_state.period_label_count;
 	g_state.period = period;
 	mark_dirty();
 }
 
 void scoreboard_period_advance(void)
 {
-	int max_period = g_state.overtime_enabled
-				 ? g_state.segment_count + g_state.ot_max
-				 : g_state.segment_count;
-	if (g_state.period < max_period) {
+	if (g_state.period < g_state.period_label_count) {
 		g_state.period++;
 		scoreboard_clock_reset();
 		mark_dirty();
@@ -506,24 +518,117 @@ void scoreboard_format_period(char *buf, size_t size)
 {
 	if (buf == NULL || size == 0)
 		return;
-	int sc = g_state.segment_count;
-	if (g_state.period == sc + 1)
-		snprintf(buf, size, "OT");
-	else if (g_state.period > sc + 1)
-		snprintf(buf, size, "OT%d", g_state.period - sc);
-	else
-		snprintf(buf, size, "%d", g_state.period);
+	int idx = g_state.period - 1;
+	if (idx >= 0 && idx < g_state.period_label_count) {
+		snprintf(buf, size, "%s", g_state.period_labels[idx]);
+		return;
+	}
+	/* Fallback for periods beyond labels */
+	snprintf(buf, size, "%d", g_state.period);
 }
 
 void scoreboard_set_overtime_enabled(bool enabled)
 {
 	g_state.overtime_enabled = enabled;
+	generate_default_period_labels();
+	if (g_state.period > g_state.period_label_count)
+		g_state.period = g_state.period_label_count;
 	mark_dirty();
 }
 
 bool scoreboard_get_overtime_enabled(void)
 {
 	return g_state.overtime_enabled;
+}
+
+/* ---- period labels ---- */
+
+static void generate_default_period_labels(void)
+{
+	int count = 0;
+	/* Regular segments: "1", "2", "3", ... */
+	for (int i = 0; i < g_state.segment_count &&
+			count < SCOREBOARD_MAX_PERIOD_LABELS;
+	     i++) {
+		snprintf(g_state.period_labels[count],
+			 SCOREBOARD_PERIOD_LABEL_SIZE, "%d", i + 1);
+		count++;
+	}
+	/* Overtime labels: "OT", "OT2", "OT3", ... */
+	if (g_state.overtime_enabled) {
+		for (int i = 0; i < g_state.ot_max &&
+				count < SCOREBOARD_MAX_PERIOD_LABELS;
+		     i++) {
+			if (i == 0)
+				snprintf(g_state.period_labels[count],
+					 SCOREBOARD_PERIOD_LABEL_SIZE, "OT");
+			else
+				snprintf(g_state.period_labels[count],
+					 SCOREBOARD_PERIOD_LABEL_SIZE, "OT%d",
+					 i + 1);
+			count++;
+		}
+	}
+	g_state.period_label_count = count;
+}
+
+void scoreboard_set_period_labels(const char *labels)
+{
+	if (labels == NULL)
+		return;
+
+	int count = 0;
+	const char *p = labels;
+	while (*p != '\0' && count < SCOREBOARD_MAX_PERIOD_LABELS) {
+		const char *nl = strchr(p, '\n');
+		size_t len = nl ? (size_t)(nl - p) : strlen(p);
+		/* Skip empty lines */
+		if (len > 0) {
+			if (len >= SCOREBOARD_PERIOD_LABEL_SIZE)
+				len = SCOREBOARD_PERIOD_LABEL_SIZE - 1;
+			memcpy(g_state.period_labels[count], p, len);
+			g_state.period_labels[count][len] = '\0';
+			count++;
+		}
+		p = nl ? nl + 1 : p + len;
+	}
+	if (count > 0) {
+		g_state.period_label_count = count;
+		/* Clamp current period to new label count */
+		if (g_state.period > count)
+			g_state.period = count;
+		mark_dirty();
+	}
+}
+
+void scoreboard_get_period_labels(char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	buf[0] = '\0';
+	size_t offset = 0;
+	for (int i = 0; i < g_state.period_label_count; i++) {
+		size_t label_len = strlen(g_state.period_labels[i]);
+		/* Need room for label + newline + null */
+		if (offset + label_len + 1 >= size)
+			break;
+		memcpy(buf + offset, g_state.period_labels[i], label_len);
+		offset += label_len;
+		buf[offset++] = '\n';
+	}
+	buf[offset] = '\0';
+}
+
+int scoreboard_get_period_label_count(void)
+{
+	return g_state.period_label_count;
+}
+
+const char *scoreboard_get_period_label(int index)
+{
+	if (index < 0 || index >= g_state.period_label_count)
+		return "";
+	return g_state.period_labels[index];
 }
 
 void scoreboard_set_default_penalty_duration(int seconds)
@@ -536,6 +641,18 @@ void scoreboard_set_default_penalty_duration(int seconds)
 int scoreboard_get_default_penalty_duration(void)
 {
 	return g_state.default_penalty_duration;
+}
+
+void scoreboard_set_default_major_penalty_duration(int seconds)
+{
+	if (seconds < 1)
+		seconds = 1;
+	g_state.default_major_penalty_duration = seconds;
+}
+
+int scoreboard_get_default_major_penalty_duration(void)
+{
+	return g_state.default_major_penalty_duration;
 }
 
 /* ---- team names ---- */
@@ -660,6 +777,61 @@ void scoreboard_decrement_away_shots(void)
 	if (g_state.away_shots > 0)
 		g_state.away_shots--;
 	mark_dirty();
+}
+
+/* ---- faceoffs ---- */
+
+int scoreboard_get_home_faceoffs(void)
+{
+	return g_state.home_faceoffs;
+}
+
+void scoreboard_set_home_faceoffs(int faceoffs)
+{
+	g_state.home_faceoffs = faceoffs < 0 ? 0 : faceoffs;
+	mark_dirty();
+}
+
+void scoreboard_increment_home_faceoffs(void)
+{
+	g_state.home_faceoffs++;
+	mark_dirty();
+}
+
+void scoreboard_decrement_home_faceoffs(void)
+{
+	if (g_state.home_faceoffs > 0)
+		g_state.home_faceoffs--;
+	mark_dirty();
+}
+
+int scoreboard_get_away_faceoffs(void)
+{
+	return g_state.away_faceoffs;
+}
+
+void scoreboard_set_away_faceoffs(int faceoffs)
+{
+	g_state.away_faceoffs = faceoffs < 0 ? 0 : faceoffs;
+	mark_dirty();
+}
+
+void scoreboard_increment_away_faceoffs(void)
+{
+	g_state.away_faceoffs++;
+	mark_dirty();
+}
+
+void scoreboard_decrement_away_faceoffs(void)
+{
+	if (g_state.away_faceoffs > 0)
+		g_state.away_faceoffs--;
+	mark_dirty();
+}
+
+bool scoreboard_get_has_faceoffs(void)
+{
+	return g_state.has_faceoffs;
 }
 
 /* ---- fouls ---- */
@@ -851,17 +1023,23 @@ int scoreboard_get_away_penalty_count(void)
 void scoreboard_penalty_tick(int elapsed_tenths)
 {
 	bool ticked = false;
+	int home_running = 0;
+	int away_running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
-		if (g_state.home_penalties[i].active) {
+		if (g_state.home_penalties[i].active &&
+		    home_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
 			g_state.home_penalties[i].remaining_tenths -=
 				elapsed_tenths;
+			home_running++;
 			ticked = true;
 			if (g_state.home_penalties[i].remaining_tenths <= 0)
 				scoreboard_home_penalty_clear(i);
 		}
-		if (g_state.away_penalties[i].active) {
+		if (g_state.away_penalties[i].active &&
+		    away_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
 			g_state.away_penalties[i].remaining_tenths -=
 				elapsed_tenths;
+			away_running++;
 			ticked = true;
 			if (g_state.away_penalties[i].remaining_tenths <= 0)
 				scoreboard_away_penalty_clear(i);
@@ -874,17 +1052,23 @@ void scoreboard_penalty_tick(int elapsed_tenths)
 void scoreboard_penalty_adjust(int delta_tenths)
 {
 	bool adjusted = false;
+	int home_running = 0;
+	int away_running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
-		if (g_state.home_penalties[i].active) {
+		if (g_state.home_penalties[i].active &&
+		    home_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
 			g_state.home_penalties[i].remaining_tenths +=
 				delta_tenths;
+			home_running++;
 			adjusted = true;
 			if (g_state.home_penalties[i].remaining_tenths <= 0)
 				scoreboard_home_penalty_clear(i);
 		}
-		if (g_state.away_penalties[i].active) {
+		if (g_state.away_penalties[i].active &&
+		    away_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
 			g_state.away_penalties[i].remaining_tenths +=
 				delta_tenths;
+			away_running++;
 			adjusted = true;
 			if (g_state.away_penalties[i].remaining_tenths <= 0)
 				scoreboard_away_penalty_clear(i);
@@ -939,9 +1123,13 @@ void scoreboard_format_all_penalty_numbers(bool home, char *buf, size_t size)
 	const struct scoreboard_penalty *penalties =
 		home ? g_state.home_penalties : g_state.away_penalties;
 	size_t offset = 0;
+	int running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		if (!penalties[i].active)
 			continue;
+		if (running >= SCOREBOARD_MAX_RUNNING_PENALTIES)
+			break;
+		running++;
 		char line[32];
 		if (penalties[i].player_number > 0)
 			snprintf(line, sizeof(line), "#%d",
@@ -968,9 +1156,13 @@ void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size)
 	const struct scoreboard_penalty *penalties =
 		home ? g_state.home_penalties : g_state.away_penalties;
 	size_t offset = 0;
+	int running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		if (!penalties[i].active)
 			continue;
+		if (running >= SCOREBOARD_MAX_RUNNING_PENALTIES)
+			break;
+		running++;
 		int total_seconds = penalties[i].remaining_tenths / 10;
 		int minutes = total_seconds / 60;
 		int seconds = total_seconds % 60;
@@ -1034,6 +1226,12 @@ bool scoreboard_write_all_files(void)
 	snprintf(buf, sizeof(buf), "%d", g_state.away_shots);
 	ok = write_text_file(dir, "away_shots.txt", buf) && ok;
 
+	snprintf(buf, sizeof(buf), "%d", g_state.home_faceoffs);
+	ok = write_text_file(dir, "home_faceoffs.txt", buf) && ok;
+
+	snprintf(buf, sizeof(buf), "%d", g_state.away_faceoffs);
+	ok = write_text_file(dir, "away_faceoffs.txt", buf) && ok;
+
 	snprintf(buf, sizeof(buf), "%d", g_state.home_fouls);
 	ok = write_text_file(dir, "home_fouls.txt", buf) && ok;
 
@@ -1063,6 +1261,22 @@ bool scoreboard_write_all_files(void)
 	ok = write_text_file(dir, "sport.txt",
 			     scoreboard_sport_name(g_state.sport)) &&
 	     ok;
+
+	snprintf(buf, sizeof(buf), "%d",
+		 g_state.default_penalty_duration);
+	ok = write_text_file(dir, "default_penalty_duration.txt", buf) && ok;
+
+	snprintf(buf, sizeof(buf), "%d",
+		 g_state.default_major_penalty_duration);
+	ok = write_text_file(dir, "default_major_penalty_duration.txt", buf) &&
+	     ok;
+
+	{
+		char labels_buf[512];
+		scoreboard_get_period_labels(labels_buf, sizeof(labels_buf));
+		ok = write_text_file(dir, "period_labels.txt", labels_buf) &&
+		     ok;
+	}
 
 	g_dirty = false;
 	return ok;
@@ -1123,6 +1337,12 @@ bool scoreboard_read_all_files(void)
 	else
 		ok = false;
 
+	/* Faceoff files are optional — missing doesn't fail the read */
+	if (read_text_file(dir, "home_faceoffs.txt", buf, sizeof(buf)))
+		scoreboard_set_home_faceoffs(atoi(buf));
+	if (read_text_file(dir, "away_faceoffs.txt", buf, sizeof(buf)))
+		scoreboard_set_away_faceoffs(atoi(buf));
+
 	/* Fouls files are optional — missing doesn't fail the read */
 	if (read_text_file(dir, "home_fouls.txt", buf, sizeof(buf)))
 		scoreboard_set_home_fouls(atoi(buf));
@@ -1159,6 +1379,24 @@ bool scoreboard_read_all_files(void)
 			scoreboard_set_sport(s);
 	}
 
+	/* Penalty duration files are optional */
+	if (read_text_file(dir, "default_penalty_duration.txt", buf,
+			   sizeof(buf))) {
+		int val = atoi(buf);
+		if (val > 0)
+			g_state.default_penalty_duration = val;
+	}
+	if (read_text_file(dir, "default_major_penalty_duration.txt", buf,
+			   sizeof(buf))) {
+		int val = atoi(buf);
+		if (val > 0)
+			g_state.default_major_penalty_duration = val;
+	}
+
+	/* Period labels file is optional — overrides sport defaults */
+	if (read_text_file(dir, "period_labels.txt", buf, sizeof(buf)))
+		scoreboard_set_period_labels(buf);
+
 	g_dirty = false;
 	return ok;
 }
@@ -1189,6 +1427,8 @@ bool scoreboard_save_state(const char *path)
 	fprintf(f, "  \"away_score\": %d,\n", g_state.away_score);
 	fprintf(f, "  \"home_shots\": %d,\n", g_state.home_shots);
 	fprintf(f, "  \"away_shots\": %d,\n", g_state.away_shots);
+	fprintf(f, "  \"home_faceoffs\": %d,\n", g_state.home_faceoffs);
+	fprintf(f, "  \"away_faceoffs\": %d,\n", g_state.away_faceoffs);
 	fprintf(f, "  \"home_fouls\": %d,\n", g_state.home_fouls);
 	fprintf(f, "  \"away_fouls\": %d,\n", g_state.away_fouls);
 	fprintf(f, "  \"home_fouls2\": %d,\n", g_state.home_fouls2);
@@ -1205,14 +1445,22 @@ bool scoreboard_save_state(const char *path)
 			g_state.home_penalties[i].active ? "true" : "false");
 	}
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
-		bool last = (i == SCOREBOARD_PENALTY_SLOTS - 1);
 		fprintf(f, "  \"away_penalty%d_number\": %d,\n", i,
 			g_state.away_penalties[i].player_number);
 		fprintf(f, "  \"away_penalty%d_tenths\": %d,\n", i,
 			g_state.away_penalties[i].remaining_tenths);
-		fprintf(f, "  \"away_penalty%d_active\": %s%s\n", i,
-			g_state.away_penalties[i].active ? "true" : "false",
-			last ? "" : ",");
+		fprintf(f, "  \"away_penalty%d_active\": %s,\n", i,
+			g_state.away_penalties[i].active ? "true" : "false");
+	}
+
+	fprintf(f, "  \"period_label_count\": %d",
+		g_state.period_label_count);
+	for (int i = 0; i < g_state.period_label_count; i++) {
+		char key[32];
+		snprintf(key, sizeof(key), "period_label%d", i);
+		fprintf(f, ",\n");
+		bool last = (i == g_state.period_label_count - 1);
+		write_json_string(f, key, g_state.period_labels[i], last);
 	}
 
 	fprintf(f, "}\n");
@@ -1278,6 +1526,10 @@ bool scoreboard_load_state(const char *path)
 		parse_json_int(json, "home_shots", g_state.home_shots);
 	g_state.away_shots =
 		parse_json_int(json, "away_shots", g_state.away_shots);
+	g_state.home_faceoffs =
+		parse_json_int(json, "home_faceoffs", g_state.home_faceoffs);
+	g_state.away_faceoffs =
+		parse_json_int(json, "away_faceoffs", g_state.away_faceoffs);
 	g_state.home_fouls =
 		parse_json_int(json, "home_fouls", g_state.home_fouls);
 	g_state.away_fouls =
@@ -1310,6 +1562,23 @@ bool scoreboard_load_state(const char *path)
 			json, key, g_state.away_penalties[i].active);
 	}
 
+	{
+		int lcount = parse_json_int(json, "period_label_count", -1);
+		if (lcount > 0) {
+			if (lcount > SCOREBOARD_MAX_PERIOD_LABELS)
+				lcount = SCOREBOARD_MAX_PERIOD_LABELS;
+			g_state.period_label_count = lcount;
+			for (int i = 0; i < lcount; i++) {
+				char key[32];
+				snprintf(key, sizeof(key), "period_label%d",
+					 i);
+				parse_json_string(
+					json, key, g_state.period_labels[i],
+					SCOREBOARD_PERIOD_LABEL_SIZE);
+			}
+		}
+	}
+
 	free(json);
 	mark_dirty();
 	return true;
@@ -1323,6 +1592,8 @@ void scoreboard_new_game(void)
 	g_state.away_score = 0;
 	g_state.home_shots = 0;
 	g_state.away_shots = 0;
+	g_state.home_faceoffs = 0;
+	g_state.away_faceoffs = 0;
 	g_state.home_fouls = 0;
 	g_state.away_fouls = 0;
 	g_state.home_fouls2 = 0;
@@ -1388,6 +1659,7 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 	g_state.segment_count = p->segment_count;
 	g_state.ot_max = p->ot_max;
 	g_state.has_shots = p->has_shots;
+	g_state.has_faceoffs = p->has_faceoffs;
 	g_state.has_penalties = p->has_penalties;
 	g_state.has_fouls = p->has_fouls;
 	safe_copy(g_state.foul_label, p->foul_label,
@@ -1400,6 +1672,12 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 	if (p->duration_seconds > 0)
 		g_state.period_length = p->duration_seconds;
 	g_state.clock_direction = p->default_direction;
+	if (p->default_penalty_secs > 0)
+		g_state.default_penalty_duration = p->default_penalty_secs;
+	if (p->default_major_penalty_secs > 0)
+		g_state.default_major_penalty_duration =
+			p->default_major_penalty_secs;
+	generate_default_period_labels();
 	mark_dirty();
 }
 

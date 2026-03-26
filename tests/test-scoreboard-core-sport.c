@@ -75,6 +75,10 @@ static void test_set_sport_hockey(void)
 	assert(p->has_shots == true);
 	assert(p->has_penalties == true);
 	assert(p->default_direction == SCOREBOARD_CLOCK_COUNT_DOWN);
+	assert(p->default_penalty_secs == 120);
+	assert(p->default_major_penalty_secs == 300);
+	assert(scoreboard_get_default_penalty_duration() == 120);
+	assert(scoreboard_get_default_major_penalty_duration() == 300);
 }
 
 static void test_set_sport_basketball(void)
@@ -123,6 +127,8 @@ static void test_set_sport_lacrosse(void)
 	assert(scoreboard_get_has_penalties() == true);
 	assert(scoreboard_get_period_length() == 720);
 	assert(scoreboard_get_clock_direction() == SCOREBOARD_CLOCK_COUNT_DOWN);
+	assert(scoreboard_get_default_penalty_duration() == 60);
+	assert(scoreboard_get_default_major_penalty_duration() == 180);
 }
 
 static void test_set_sport_generic(void)
@@ -651,6 +657,112 @@ static void test_score_label_per_sport(void)
 	assert(strcmp(scoreboard_get_score_label(), "Score") == 0);
 }
 
+static void test_has_faceoffs_per_sport(void)
+{
+	scoreboard_reset_state_for_tests();
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_has_faceoffs() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	assert(scoreboard_get_has_faceoffs() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(scoreboard_get_has_faceoffs() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_FOOTBALL);
+	assert(scoreboard_get_has_faceoffs() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_LACROSSE);
+	assert(scoreboard_get_has_faceoffs() == true);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_RUGBY);
+	assert(scoreboard_get_has_faceoffs() == false);
+
+	scoreboard_set_sport(SCOREBOARD_SPORT_GENERIC);
+	assert(scoreboard_get_has_faceoffs() == false);
+}
+
+static void test_faceoffs_reset_by_new_game(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_faceoffs(15);
+	scoreboard_set_away_faceoffs(12);
+	scoreboard_new_game();
+	assert(scoreboard_get_home_faceoffs() == 0);
+	assert(scoreboard_get_away_faceoffs() == 0);
+}
+
+static void test_default_labels_per_sport(void)
+{
+	/* Hockey: 1,2,3,OT,OT2,OT3,OT4 */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_period_label_count() == 7);
+	assert(strcmp(scoreboard_get_period_label(3), "OT") == 0);
+
+	/* Basketball: 1,2,3,4,OT */
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	assert(scoreboard_get_period_label_count() == 5);
+	assert(strcmp(scoreboard_get_period_label(3), "4") == 0);
+	assert(strcmp(scoreboard_get_period_label(4), "OT") == 0);
+
+	/* Soccer: 1,2,OT */
+	scoreboard_set_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(scoreboard_get_period_label_count() == 3);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(2), "OT") == 0);
+
+	/* Generic: 1 (1 segment, no OT) */
+	scoreboard_set_sport(SCOREBOARD_SPORT_GENERIC);
+	assert(scoreboard_get_period_label_count() == 1);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+}
+
+static void test_period_labels_write_read_files(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("1\n2\n3\n4\n5\nOT\n2OT\n");
+
+	char tmpdir[256];
+	make_tmp_dir(tmpdir, sizeof(tmpdir));
+	scoreboard_set_output_directory(tmpdir);
+	scoreboard_mark_dirty();
+	assert(scoreboard_write_all_files());
+
+	/* Reset labels, then read back */
+	scoreboard_set_period_labels("A\nB\n");
+	assert(scoreboard_get_period_label_count() == 2);
+
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_get_period_label_count() == 7);
+	assert(strcmp(scoreboard_get_period_label(5), "OT") == 0);
+	assert(strcmp(scoreboard_get_period_label(6), "2OT") == 0);
+
+	cleanup_dir(tmpdir);
+}
+
+static void test_period_labels_save_load_state(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("Q1\nQ2\nQ3\nQ4\nOT\n");
+
+	char tmpfile[256];
+	make_tmp_file(tmpfile, sizeof(tmpfile));
+	assert(scoreboard_save_state(tmpfile));
+
+	/* Reset, then load */
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_period_label_count() == 7);
+
+	assert(scoreboard_load_state(tmpfile));
+	assert(scoreboard_get_period_label_count() == 5);
+	assert(strcmp(scoreboard_get_period_label(0), "Q1") == 0);
+	assert(strcmp(scoreboard_get_period_label(4), "OT") == 0);
+
+	remove(tmpfile);
+}
+
 int main(void)
 {
 	test_default_sport_is_hockey();
@@ -691,6 +803,11 @@ int main(void)
 	test_fouls2_reset_by_new_game();
 	test_log_scores_per_sport();
 	test_score_label_per_sport();
+	test_has_faceoffs_per_sport();
+	test_faceoffs_reset_by_new_game();
+	test_default_labels_per_sport();
+	test_period_labels_write_read_files();
+	test_period_labels_save_load_state();
 
 	printf("All scoreboard-core sport tests passed.\n");
 	return 0;

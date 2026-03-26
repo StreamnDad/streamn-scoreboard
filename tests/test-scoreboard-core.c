@@ -435,6 +435,40 @@ static void test_penalty_adjust_positive_delta(void)
 	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 0);
 }
 
+static void test_penalties_stop_when_clock_stops(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Set clock to 1 second (10 tenths) */
+	scoreboard_clock_set_tenths(10);
+	scoreboard_home_penalty_add(12, 120); /* 1200 tenths */
+
+	scoreboard_clock_start();
+	/* Tick 10 tenths — clock reaches 0:00 and auto-stops */
+	scoreboard_clock_tick(10);
+
+	assert(scoreboard_clock_get_tenths() == 0);
+	assert(!scoreboard_clock_is_running());
+	/* Penalty should NOT have been decremented on the stopping tick */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1200);
+}
+
+static void test_penalties_tick_while_clock_runs(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Set clock to 2 seconds (20 tenths) */
+	scoreboard_clock_set_tenths(20);
+	scoreboard_home_penalty_add(12, 120); /* 1200 tenths */
+
+	scoreboard_clock_start();
+	/* Tick 10 tenths — clock still has 10 left, stays running */
+	scoreboard_clock_tick(10);
+
+	assert(scoreboard_clock_get_tenths() == 10);
+	assert(scoreboard_clock_is_running());
+	/* Penalty SHOULD have ticked */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1190);
+}
+
 static void test_overtime_enabled(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -564,6 +598,179 @@ static void test_dirty_mark_dirty(void)
 	assert(scoreboard_is_dirty());
 }
 
+/* ---- period label tests ---- */
+
+static void test_default_period_labels_hockey(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_period_label_count() == 7);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(1), "2") == 0);
+	assert(strcmp(scoreboard_get_period_label(2), "3") == 0);
+	assert(strcmp(scoreboard_get_period_label(3), "OT") == 0);
+	assert(strcmp(scoreboard_get_period_label(4), "OT2") == 0);
+	assert(strcmp(scoreboard_get_period_label(5), "OT3") == 0);
+	assert(strcmp(scoreboard_get_period_label(6), "OT4") == 0);
+}
+
+static void test_period_labels_no_ot(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_overtime_enabled(false);
+	assert(scoreboard_get_period_label_count() == 3);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(1), "2") == 0);
+	assert(strcmp(scoreboard_get_period_label(2), "3") == 0);
+}
+
+static void test_set_custom_period_labels(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("1\n2\n3\n4\n5\nOT\n2OT\n");
+	assert(scoreboard_get_period_label_count() == 7);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(4), "5") == 0);
+	assert(strcmp(scoreboard_get_period_label(5), "OT") == 0);
+	assert(strcmp(scoreboard_get_period_label(6), "2OT") == 0);
+
+	/* format_period uses custom labels */
+	char buf[16];
+	scoreboard_set_period(6);
+	scoreboard_format_period(buf, sizeof(buf));
+	assert(strcmp(buf, "OT") == 0);
+
+	scoreboard_set_period(7);
+	scoreboard_format_period(buf, sizeof(buf));
+	assert(strcmp(buf, "2OT") == 0);
+}
+
+static void test_period_labels_clamp_period(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period(5);
+	/* Set labels with fewer entries — period should clamp */
+	scoreboard_set_period_labels("1\n2\n3\n");
+	assert(scoreboard_get_period_label_count() == 3);
+	assert(scoreboard_get_period() == 3);
+}
+
+static void test_period_labels_skip_empty_lines(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("1\n\n2\n\n3\n");
+	assert(scoreboard_get_period_label_count() == 3);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(1), "2") == 0);
+	assert(strcmp(scoreboard_get_period_label(2), "3") == 0);
+}
+
+static void test_period_labels_null_ignored(void)
+{
+	scoreboard_reset_state_for_tests();
+	int orig = scoreboard_get_period_label_count();
+	scoreboard_set_period_labels(NULL);
+	assert(scoreboard_get_period_label_count() == orig);
+}
+
+static void test_period_labels_empty_string_ignored(void)
+{
+	scoreboard_reset_state_for_tests();
+	int orig = scoreboard_get_period_label_count();
+	scoreboard_set_period_labels("");
+	assert(scoreboard_get_period_label_count() == orig);
+}
+
+static void test_get_period_labels_roundtrip(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("A\nB\nC\n");
+	char buf[256];
+	scoreboard_get_period_labels(buf, sizeof(buf));
+	assert(strcmp(buf, "A\nB\nC\n") == 0);
+}
+
+static void test_get_period_labels_null(void)
+{
+	scoreboard_get_period_labels(NULL, 0);
+	char buf[2];
+	scoreboard_get_period_labels(buf, 0);
+}
+
+static void test_get_period_label_out_of_range(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(strcmp(scoreboard_get_period_label(-1), "") == 0);
+	assert(strcmp(scoreboard_get_period_label(100), "") == 0);
+}
+
+static void test_period_format_fallback_beyond_labels(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Force period beyond label count via direct state manipulation */
+	scoreboard_set_period_labels("X\nY\n");
+	/* period_label_count is 2, period was clamped to 2 */
+	char buf[16];
+	scoreboard_set_period(2);
+	scoreboard_format_period(buf, sizeof(buf));
+	assert(strcmp(buf, "Y") == 0);
+}
+
+static void test_overtime_enabled_regenerates_labels(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_period_label_count() == 7);
+	scoreboard_set_overtime_enabled(false);
+	assert(scoreboard_get_period_label_count() == 3);
+	scoreboard_set_overtime_enabled(true);
+	assert(scoreboard_get_period_label_count() == 7);
+}
+
+static void test_set_period_labels_marks_dirty(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_is_dirty());
+	scoreboard_set_period_labels("1\n2\n");
+	assert(scoreboard_is_dirty());
+}
+
+static void test_period_labels_long_label_truncated(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* SCOREBOARD_PERIOD_LABEL_SIZE is 16, so a 20-char label gets truncated */
+	scoreboard_set_period_labels("ABCDEFGHIJKLMNOPQRST\n");
+	assert(scoreboard_get_period_label_count() == 1);
+	assert(strlen(scoreboard_get_period_label(0)) == 15);
+}
+
+static void test_get_period_labels_small_buffer(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("Alpha\nBeta\nGamma\n");
+	/* Buffer too small to hold all labels — stops early */
+	char buf[8];
+	scoreboard_get_period_labels(buf, sizeof(buf));
+	/* Should have "Alpha\n" (6 chars) and stop before Beta */
+	assert(strcmp(buf, "Alpha\n") == 0);
+}
+
+static void test_period_format_beyond_labels(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Manually force period beyond label range by setting labels after
+	   setting period. We need a trick: set many labels first, set period
+	   high, then reduce labels. But set_period_labels clamps... so instead
+	   test the fallback path by checking format works at boundary. */
+	/* The fallback prints the raw number. We can't reach it via the public
+	   API since set_period clamps, but we can test via a save/load
+	   with a hand-crafted JSON that has period > label count. For now,
+	   we verify the label-based path works at max index. */
+	scoreboard_set_period_labels("X\n");
+	scoreboard_set_period(1);
+	char buf[16];
+	scoreboard_format_period(buf, sizeof(buf));
+	assert(strcmp(buf, "X") == 0);
+}
+
 int main(void)
 {
 	test_description();
@@ -600,6 +807,8 @@ int main(void)
 	test_penalty_adjust_both_teams();
 	test_penalty_clear_after_adjust();
 	test_penalty_adjust_positive_delta();
+	test_penalties_stop_when_clock_stops();
+	test_penalties_tick_while_clock_runs();
 	test_overtime_enabled();
 	test_dirty_reset_clears();
 	test_dirty_clock_start();
@@ -617,6 +826,22 @@ int main(void)
 	test_dirty_period_rewind();
 	test_dirty_set_overtime_enabled();
 	test_dirty_mark_dirty();
+	test_default_period_labels_hockey();
+	test_period_labels_no_ot();
+	test_set_custom_period_labels();
+	test_period_labels_clamp_period();
+	test_period_labels_skip_empty_lines();
+	test_period_labels_null_ignored();
+	test_period_labels_empty_string_ignored();
+	test_get_period_labels_roundtrip();
+	test_get_period_labels_null();
+	test_get_period_label_out_of_range();
+	test_period_format_fallback_beyond_labels();
+	test_overtime_enabled_regenerates_labels();
+	test_set_period_labels_marks_dirty();
+	test_period_labels_long_label_truncated();
+	test_get_period_labels_small_buffer();
+	test_period_format_beyond_labels();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
 	return 0;

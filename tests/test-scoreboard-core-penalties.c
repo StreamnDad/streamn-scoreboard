@@ -301,6 +301,16 @@ static void test_default_penalty_duration(void)
 	assert(scoreboard_get_default_penalty_duration() == 1);
 }
 
+static void test_default_major_penalty_duration(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_default_major_penalty_duration() == 300);
+	scoreboard_set_default_major_penalty_duration(600);
+	assert(scoreboard_get_default_major_penalty_duration() == 600);
+	scoreboard_set_default_major_penalty_duration(0);
+	assert(scoreboard_get_default_major_penalty_duration() == 1);
+}
+
 static void test_format_all_penalty_numbers(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -392,7 +402,7 @@ static void test_format_all_penalty_times_null(void)
 
 static void test_format_all_penalties_order_stable(void)
 {
-	/* Add 3, clear middle, verify remaining order is stable */
+	/* Add 3, format only shows first 2 running */
 	scoreboard_reset_state_for_tests();
 	scoreboard_home_penalty_add(10, 120);
 	scoreboard_home_penalty_add(20, 60);
@@ -401,18 +411,18 @@ static void test_format_all_penalties_order_stable(void)
 	char nums[256], times[256];
 	scoreboard_format_all_penalty_numbers(true, nums, sizeof(nums));
 	scoreboard_format_all_penalty_times(true, times, sizeof(times));
-	assert(strcmp(nums, "#10\n#20\n#30") == 0);
-	assert(strcmp(times, "2:00\n1:00\n5:00") == 0);
+	assert(strcmp(nums, "#10\n#20") == 0);
+	assert(strcmp(times, "2:00\n1:00") == 0);
 
-	/* clear middle slot */
-	scoreboard_home_penalty_clear(1);
+	/* clear first slot — third promotes to running */
+	scoreboard_home_penalty_clear(0);
 	scoreboard_format_all_penalty_numbers(true, nums, sizeof(nums));
 	scoreboard_format_all_penalty_times(true, times, sizeof(times));
-	assert(strcmp(nums, "#10\n#30") == 0);
-	assert(strcmp(times, "2:00\n5:00") == 0);
+	assert(strcmp(nums, "#20\n#30") == 0);
+	assert(strcmp(times, "1:00\n5:00") == 0);
 
-	/* numbers and times stay paired */
-	scoreboard_home_penalty_clear(0);
+	/* clear second — only third remains */
+	scoreboard_home_penalty_clear(1);
 	scoreboard_format_all_penalty_numbers(true, nums, sizeof(nums));
 	scoreboard_format_all_penalty_times(true, times, sizeof(times));
 	assert(strcmp(nums, "#30") == 0);
@@ -506,6 +516,90 @@ static void test_dirty_penalty_adjust(void)
 	assert(scoreboard_is_dirty());
 }
 
+static void test_only_two_penalties_tick(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120); /* slot 0: 1200 tenths */
+	scoreboard_home_penalty_add(20, 120); /* slot 1: 1200 tenths */
+	scoreboard_home_penalty_add(30, 120); /* slot 2: 1200 tenths (queued) */
+
+	scoreboard_penalty_tick(10);
+
+	/* First 2 should tick */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1190);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1190);
+	/* Third should NOT tick — it's queued */
+	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1200);
+}
+
+static void test_only_two_away_penalties_tick(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(10, 120);
+	scoreboard_away_penalty_add(20, 120);
+	scoreboard_away_penalty_add(30, 120);
+
+	scoreboard_penalty_tick(10);
+
+	assert(scoreboard_get_away_penalty(0)->remaining_tenths == 1190);
+	assert(scoreboard_get_away_penalty(1)->remaining_tenths == 1190);
+	assert(scoreboard_get_away_penalty(2)->remaining_tenths == 1200);
+}
+
+static void test_queued_penalty_starts_after_expiry(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 1);   /* slot 0: 10 tenths */
+	scoreboard_home_penalty_add(20, 120); /* slot 1: 1200 tenths */
+	scoreboard_home_penalty_add(30, 120); /* slot 2: queued */
+
+	/* Tick enough to expire slot 0 */
+	scoreboard_penalty_tick(10);
+
+	/* Slot 0 expired */
+	assert(!scoreboard_get_home_penalty(0)->active);
+	/* Slot 1 ticked */
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1190);
+	/* Slot 2 still queued — didn't tick this round */
+	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1200);
+
+	/* Next tick: slot 2 is now one of the first 2 active, so it ticks */
+	scoreboard_penalty_tick(10);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1180);
+	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1190);
+}
+
+static void test_penalty_adjust_only_running(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120); /* slot 0: 1200 tenths */
+	scoreboard_home_penalty_add(20, 120); /* slot 1: 1200 tenths */
+	scoreboard_home_penalty_add(30, 120); /* slot 2: queued */
+
+	scoreboard_penalty_adjust(-100);
+
+	/* First 2 adjusted */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1100);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1100);
+	/* Queued penalty NOT adjusted */
+	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1200);
+}
+
+static void test_format_only_running_penalties(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 60);
+	scoreboard_home_penalty_add(30, 300);
+
+	char nums[256], times[256];
+	/* Format should only show first 2 running penalties */
+	scoreboard_format_all_penalty_numbers(true, nums, sizeof(nums));
+	scoreboard_format_all_penalty_times(true, times, sizeof(times));
+	assert(strcmp(nums, "#10\n#20") == 0);
+	assert(strcmp(times, "2:00\n1:00") == 0);
+}
+
 int main(void)
 {
 	test_home_penalty_add();
@@ -539,6 +633,7 @@ int main(void)
 	test_away_penalty_count();
 	test_format_penalty_number_zero();
 	test_default_penalty_duration();
+	test_default_major_penalty_duration();
 	test_format_all_penalty_numbers();
 	test_format_all_penalty_numbers_away();
 	test_format_all_penalty_numbers_null();
@@ -555,6 +650,11 @@ int main(void)
 	test_dirty_penalty_tick_active();
 	test_dirty_penalty_tick_no_active();
 	test_dirty_penalty_adjust();
+	test_only_two_penalties_tick();
+	test_only_two_away_penalties_tick();
+	test_queued_penalty_starts_after_expiry();
+	test_penalty_adjust_only_running();
+	test_format_only_running_penalties();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

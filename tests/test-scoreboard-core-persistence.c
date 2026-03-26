@@ -833,6 +833,8 @@ static void test_write_read_round_trip(void)
 	scoreboard_clock_set_tenths(5100); /* 8:30 */
 	scoreboard_home_penalty_add(12, 120);
 	scoreboard_away_penalty_add(22, 60);
+	scoreboard_set_default_penalty_duration(90);
+	scoreboard_set_default_major_penalty_duration(450);
 
 	bool ok = scoreboard_write_all_files();
 	assert(ok);
@@ -860,6 +862,8 @@ static void test_write_read_round_trip(void)
 	assert(scoreboard_get_home_penalty(0)->player_number == 12);
 	assert(scoreboard_get_away_penalty_count() == 1);
 	assert(scoreboard_get_away_penalty(0)->player_number == 22);
+	assert(scoreboard_get_default_penalty_duration() == 90);
+	assert(scoreboard_get_default_major_penalty_duration() == 450);
 
 	cleanup_tmp_dir();
 }
@@ -1021,6 +1025,187 @@ static void test_dirty_write_no_dir_dirty(void)
 	assert(!scoreboard_write_all_files());
 }
 
+static void test_faceoffs_write_read_files(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+
+	scoreboard_set_home_faceoffs(15);
+	scoreboard_set_away_faceoffs(12);
+	scoreboard_mark_dirty();
+	assert(scoreboard_write_all_files());
+
+	char path[512];
+	char *content;
+
+	snprintf(path, sizeof(path), "%s/home_faceoffs.txt", g_tmp_dir);
+	content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "15") == 0);
+	free(content);
+
+	snprintf(path, sizeof(path), "%s/away_faceoffs.txt", g_tmp_dir);
+	content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "12") == 0);
+	free(content);
+
+	/* Reset then read back */
+	scoreboard_set_home_faceoffs(0);
+	scoreboard_set_away_faceoffs(0);
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_get_home_faceoffs() == 15);
+	assert(scoreboard_get_away_faceoffs() == 12);
+
+	cleanup_tmp_dir();
+}
+
+static void test_faceoffs_save_load_state(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	scoreboard_set_home_faceoffs(20);
+	scoreboard_set_away_faceoffs(18);
+
+	char save_path[512];
+	snprintf(save_path, sizeof(save_path), "%s/state_fo.json", g_tmp_dir);
+
+	assert(scoreboard_save_state(save_path));
+
+	/* Reset then load */
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_home_faceoffs() == 0);
+	assert(scoreboard_get_away_faceoffs() == 0);
+
+	assert(scoreboard_load_state(save_path));
+	assert(scoreboard_get_home_faceoffs() == 20);
+	assert(scoreboard_get_away_faceoffs() == 18);
+
+	cleanup_tmp_dir();
+}
+
+static void test_period_labels_write_read(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_labels("Q1\nQ2\nQ3\nQ4\nOT\n");
+
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_mark_dirty();
+	assert(scoreboard_write_all_files());
+
+	/* Verify period_labels.txt content */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/period_labels.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "Q1\nQ2\nQ3\nQ4\nOT\n") == 0);
+	free(content);
+
+	/* Reset to defaults, read back */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_get_period_label_count() == 5);
+	assert(strcmp(scoreboard_get_period_label(0), "Q1") == 0);
+	assert(strcmp(scoreboard_get_period_label(4), "OT") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_period_labels_save_load_zero_labels(void)
+{
+	/* Craft a JSON with period_label_count: 0 */
+	scoreboard_reset_state_for_tests();
+
+	char tmpfile[256];
+#ifdef _WIN32
+	snprintf(tmpfile, sizeof(tmpfile), "%s\\sb_test_%d.json",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid());
+#else
+	snprintf(tmpfile, sizeof(tmpfile), "/tmp/sb_test_%d.json",
+		 (int)getpid());
+#endif
+
+	/* Save state first to get a valid base JSON */
+	assert(scoreboard_save_state(tmpfile));
+
+	/* Load it back — labels should survive from save */
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(tmpfile));
+	assert(scoreboard_get_period_label_count() == 7);
+
+	remove(tmpfile);
+}
+
+static void test_period_labels_load_exceeds_max(void)
+{
+	scoreboard_reset_state_for_tests();
+
+	char tmpfile[256];
+#ifdef _WIN32
+	snprintf(tmpfile, sizeof(tmpfile), "%s\\sb_test2_%d.json",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid());
+#else
+	snprintf(tmpfile, sizeof(tmpfile), "/tmp/sb_test2_%d.json",
+		 (int)getpid());
+#endif
+
+	/* Write a JSON with period_label_count exceeding max */
+	FILE *f = fopen(tmpfile, "w");
+	assert(f != NULL);
+	fprintf(f, "{\n");
+	fprintf(f, "  \"period_label_count\": 20,\n");
+	for (int i = 0; i < 20; i++) {
+		fprintf(f, "  \"period_label%d\": \"L%d\"%s\n", i, i,
+			i < 19 ? "," : "");
+	}
+	fprintf(f, "}\n");
+	fclose(f);
+
+	assert(scoreboard_load_state(tmpfile));
+	assert(scoreboard_get_period_label_count() ==
+	       SCOREBOARD_MAX_PERIOD_LABELS);
+
+	remove(tmpfile);
+}
+
+static void test_period_beyond_labels_format(void)
+{
+	/* Craft a JSON where period > period_label_count to exercise
+	   the fallback branch in format_period */
+	scoreboard_reset_state_for_tests();
+
+	char tmpfile[256];
+#ifdef _WIN32
+	snprintf(tmpfile, sizeof(tmpfile), "%s\\sb_test3_%d.json",
+		 getenv("TEMP") ? getenv("TEMP") : ".", (int)getpid());
+#else
+	snprintf(tmpfile, sizeof(tmpfile), "/tmp/sb_test3_%d.json",
+		 (int)getpid());
+#endif
+
+	FILE *f = fopen(tmpfile, "w");
+	assert(f != NULL);
+	fprintf(f, "{\n");
+	fprintf(f, "  \"period\": 5,\n");
+	fprintf(f, "  \"period_label_count\": 2,\n");
+	fprintf(f, "  \"period_label0\": \"A\",\n");
+	fprintf(f, "  \"period_label1\": \"B\"\n");
+	fprintf(f, "}\n");
+	fclose(f);
+
+	assert(scoreboard_load_state(tmpfile));
+	/* period was loaded as 5 but labels only go to 2 — exercise fallback */
+	char buf[16];
+	scoreboard_format_period(buf, sizeof(buf));
+	assert(strcmp(buf, "5") == 0);
+
+	remove(tmpfile);
+}
+
 int main(void)
 {
 	test_write_all_files();
@@ -1066,6 +1251,12 @@ int main(void)
 	test_dirty_load_state_sets();
 	test_dirty_write_no_dir_not_dirty();
 	test_dirty_write_no_dir_dirty();
+	test_faceoffs_write_read_files();
+	test_faceoffs_save_load_state();
+	test_period_labels_write_read();
+	test_period_labels_save_load_zero_labels();
+	test_period_labels_load_exceeds_max();
+	test_period_beyond_labels_format();
 
 	printf("All scoreboard-core persistence tests passed.\n");
 	return 0;

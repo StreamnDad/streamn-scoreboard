@@ -292,6 +292,112 @@ static void test_dirty_away_name(void)
 	assert(scoreboard_is_dirty());
 }
 
+static void test_home_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_home_faceoffs() == 0);
+	scoreboard_increment_home_faceoffs();
+	assert(scoreboard_get_home_faceoffs() == 1);
+	scoreboard_increment_home_faceoffs();
+	assert(scoreboard_get_home_faceoffs() == 2);
+	scoreboard_decrement_home_faceoffs();
+	assert(scoreboard_get_home_faceoffs() == 1);
+}
+
+static void test_home_faceoffs_floor(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_home_faceoffs();
+	assert(scoreboard_get_home_faceoffs() == 0);
+}
+
+static void test_home_faceoffs_set(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_faceoffs(10);
+	assert(scoreboard_get_home_faceoffs() == 10);
+	scoreboard_set_home_faceoffs(-3);
+	assert(scoreboard_get_home_faceoffs() == 0);
+}
+
+static void test_away_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_get_away_faceoffs() == 0);
+	scoreboard_increment_away_faceoffs();
+	assert(scoreboard_get_away_faceoffs() == 1);
+	scoreboard_decrement_away_faceoffs();
+	assert(scoreboard_get_away_faceoffs() == 0);
+}
+
+static void test_away_faceoffs_floor(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_away_faceoffs();
+	assert(scoreboard_get_away_faceoffs() == 0);
+}
+
+static void test_away_faceoffs_set(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_away_faceoffs(7);
+	assert(scoreboard_get_away_faceoffs() == 7);
+	scoreboard_set_away_faceoffs(-1);
+	assert(scoreboard_get_away_faceoffs() == 0);
+}
+
+static void test_new_game_resets_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_faceoffs(15);
+	scoreboard_set_away_faceoffs(12);
+	scoreboard_new_game();
+	assert(scoreboard_get_home_faceoffs() == 0);
+	assert(scoreboard_get_away_faceoffs() == 0);
+}
+
+static void test_dirty_home_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_home_faceoffs(5);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_home_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_home_faceoffs();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_home_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_home_faceoffs();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_away_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_away_faceoffs(5);
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_increment_away_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_increment_away_faceoffs();
+	assert(scoreboard_is_dirty());
+}
+
+static void test_dirty_decrement_away_faceoffs(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_decrement_away_faceoffs();
+	assert(scoreboard_is_dirty());
+}
+
 static void test_dirty_new_game(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -333,6 +439,19 @@ int main(void)
 	test_dirty_decrement_away_shots();
 	test_dirty_home_name();
 	test_dirty_away_name();
+	test_home_faceoffs();
+	test_home_faceoffs_floor();
+	test_home_faceoffs_set();
+	test_away_faceoffs();
+	test_away_faceoffs_floor();
+	test_away_faceoffs_set();
+	test_new_game_resets_faceoffs();
+	test_dirty_home_faceoffs();
+	test_dirty_increment_home_faceoffs();
+	test_dirty_decrement_home_faceoffs();
+	test_dirty_away_faceoffs();
+	test_dirty_increment_away_faceoffs();
+	test_dirty_decrement_away_faceoffs();
 	test_dirty_new_game();
 
 	printf("All scoreboard-core scoring tests passed.\n");
