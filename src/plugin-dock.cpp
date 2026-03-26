@@ -21,7 +21,9 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFileSystemWatcher>
 #include <QtCore/QTimer>
+#include <QtCore/QUrl>
 #include <QtGui/QClipboard>
+#include <QtGui/QDesktopServices>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPixmap>
 
@@ -100,6 +102,9 @@ QVBoxLayout *g_away_pen_layout = nullptr;
 QVector<penalty_row_widgets *> g_home_pen_rows;
 QVector<penalty_row_widgets *> g_away_pen_rows;
 QWidget *g_shots_row_widget = nullptr;
+QWidget *g_faceoffs_row_widget = nullptr;
+QLabel *g_home_faceoffs_label = nullptr;
+QLabel *g_away_faceoffs_label = nullptr;
 QWidget *g_fouls_row_widget = nullptr;
 QLabel *g_home_fouls_label = nullptr;
 QLabel *g_away_fouls_label = nullptr;
@@ -151,7 +156,7 @@ struct recording_chapter {
 };
 QVector<recording_chapter> g_recording_chapters;
 
-static const int kNumHotkeys = 31;
+static const int kNumHotkeys = 37;
 
 static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_clock_startstop",  "sb_clock_reset",
@@ -170,6 +175,9 @@ static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_away_foul_plus",   "sb_away_foul_minus",
 	"sb_home_foul2_plus",  "sb_home_foul2_minus",
 	"sb_away_foul2_plus",  "sb_away_foul2_minus",
+	"sb_home_major_pen_add", "sb_away_major_pen_add",
+	"sb_home_fo_plus",     "sb_home_fo_minus",
+	"sb_away_fo_plus",     "sb_away_fo_minus",
 };
 
 obs_hotkey_id g_hotkey_ids[kNumHotkeys];
@@ -782,7 +790,7 @@ void update_copy_timestamps_visibility()
 	g_copy_timestamps_btn->setVisible(false);
 }
 
-void run_reeln_segment_command()
+void run_reeln_highlights_command()
 {
 	const QString executable =
 		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
@@ -794,21 +802,10 @@ void run_reeln_segment_command()
 	if (!extra.isEmpty())
 		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
 
-	bool game_finished =
-		g_game_finished && g_game_finished->isChecked();
-	if (game_finished) {
-		log_game_end_event();
-		QStringList args;
-		args << "game" << "highlights" << extra_parts;
-		add_job_row("Game Highlights", args);
-	} else {
-		char period_buf[64];
-		scoreboard_format_period(period_buf, sizeof(period_buf));
-		QString period_text = QString::fromUtf8(period_buf);
-		QStringList args;
-		args << "game" << "segment" << period_text << extra_parts;
-		add_job_row("Segment " + period_text, args);
-	}
+	log_game_end_event();
+	QStringList args;
+	args << "game" << "highlights" << extra_parts;
+	add_job_row("Game Highlights", args);
 }
 
 void write_files_now();
@@ -862,6 +859,9 @@ void update_all_labels()
 	}
 	if (g_shots_row_widget)
 		g_shots_row_widget->setVisible(scoreboard_get_has_shots());
+	if (g_faceoffs_row_widget)
+		g_faceoffs_row_widget->setVisible(
+			scoreboard_get_has_faceoffs());
 	if (g_fouls_row_widget)
 		g_fouls_row_widget->setVisible(scoreboard_get_has_fouls());
 	if (g_fouls_center_label)
@@ -908,6 +908,12 @@ void update_all_labels()
 	if (g_away_shots_label)
 		g_away_shots_label->setText(
 			QString::number(scoreboard_get_away_shots()));
+	if (g_home_faceoffs_label)
+		g_home_faceoffs_label->setText(
+			QString::number(scoreboard_get_home_faceoffs()));
+	if (g_away_faceoffs_label)
+		g_away_faceoffs_label->setText(
+			QString::number(scoreboard_get_away_faceoffs()));
 
 	auto update_pen_rows = [](QVBoxLayout *layout,
 				  QVector<penalty_row_widgets *> &rows,
@@ -938,6 +944,7 @@ void update_all_labels()
 
 		/* If slots haven't changed, just update the label text */
 		if (!need_rebuild) {
+			int idx = 0;
 			for (penalty_row_widgets *pw : rows) {
 				char nbuf[32], tbuf[32];
 				scoreboard_format_penalty_number(
@@ -946,9 +953,12 @@ void update_all_labels()
 				scoreboard_format_penalty_time(
 					pw->slot, pw->home, tbuf,
 					sizeof(tbuf));
-				pw->label->setText(
-					QString::fromUtf8(nbuf) + " " +
-					QString::fromUtf8(tbuf));
+				QString text = QString::fromUtf8(nbuf)
+					+ " " + QString::fromUtf8(tbuf);
+				if (idx >= SCOREBOARD_MAX_RUNNING_PENALTIES)
+					text += " (queued)";
+				pw->label->setText(text);
+				idx++;
 			}
 			return;
 		}
@@ -962,6 +972,8 @@ void update_all_labels()
 		}
 		rows.clear();
 
+		QWidget *parent_widget = layout->parentWidget();
+		int row_idx = 0;
 		for (int i : active_slots) {
 			char nbuf[32], tbuf[32];
 			scoreboard_format_penalty_number(i, home, nbuf,
@@ -972,15 +984,18 @@ void update_all_labels()
 			penalty_row_widgets *pw = new penalty_row_widgets();
 			pw->slot = i;
 			pw->home = home;
-			pw->container = new QWidget();
+			pw->container = new QWidget(parent_widget);
 			QHBoxLayout *hl = new QHBoxLayout(pw->container);
 			hl->setContentsMargins(0, 0, 0, 0);
 			hl->setSpacing(4);
 
-			pw->label = new QLabel(
-				QString::fromUtf8(nbuf) + " " +
-				QString::fromUtf8(tbuf));
+			QString text = QString::fromUtf8(nbuf) + " " +
+				QString::fromUtf8(tbuf);
+			if (row_idx >= SCOREBOARD_MAX_RUNNING_PENALTIES)
+				text += " (queued)";
+			pw->label = new QLabel(text);
 			pw->label->setStyleSheet("font-size: 11px;");
+			row_idx++;
 			pw->clear_btn = new QPushButton("X");
 			pw->clear_btn->setFixedSize(18, 18);
 			pw->clear_btn->setStyleSheet(
@@ -1014,6 +1029,8 @@ void update_all_labels()
 			layout->addWidget(pw->container);
 			rows.push_back(pw);
 		}
+		if (parent_widget)
+			parent_widget->adjustSize();
 	};
 
 	update_pen_rows(g_home_pen_layout, g_home_pen_rows, true);
@@ -1025,11 +1042,15 @@ const char *kWatchedFiles[] = {
 	"home_score.txt",	  "away_score.txt",
 	"clock.txt",		  "period.txt",
 	"home_shots.txt",	  "away_shots.txt",
+	"home_faceoffs.txt",	  "away_faceoffs.txt",
 	"home_penalty_numbers.txt", "home_penalty_times.txt",
 	"away_penalty_numbers.txt", "away_penalty_times.txt",
 	"home_fouls.txt",	    "away_fouls.txt",
 	"home_fouls2.txt",	    "away_fouls2.txt",
 	"sport.txt",
+	"default_penalty_duration.txt",
+	"default_major_penalty_duration.txt",
+	"period_labels.txt",
 };
 const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
 const qint64 kWriteCooldownMs = 500;
@@ -1078,10 +1099,14 @@ void write_files_now()
 
 void on_tick()
 {
+	bool was_running = scoreboard_clock_is_running();
 	scoreboard_clock_tick(1);
+	bool is_running = scoreboard_clock_is_running();
 	if (scoreboard_is_dirty())
 		write_files_now();
 	update_all_labels();
+	if (was_running && !is_running && g_clock_btn)
+		g_clock_btn->repaint();
 }
 
 /* ---- Profile paths ---- */
@@ -1145,7 +1170,8 @@ void update_highlights_button_visibility()
 
 /* ---- Dialogs ---- */
 
-void open_add_penalty_dialog(QWidget *parent, bool home)
+void open_add_penalty_dialog(QWidget *parent, bool home,
+			     int default_duration_secs = 0)
 {
 	QDialog dialog(parent);
 	dialog.setWindowTitle(home ? "Add Home Penalty" : "Add Away Penalty");
@@ -1161,8 +1187,11 @@ void open_add_penalty_dialog(QWidget *parent, bool home)
 	QHBoxLayout *dur_row = new QHBoxLayout();
 	dur_row->addWidget(new QLabel("Duration (sec):", &dialog));
 	QSpinBox *dur_spin = new QSpinBox(&dialog);
-	dur_spin->setRange(1, 600);
-	dur_spin->setValue(scoreboard_get_default_penalty_duration());
+	dur_spin->setRange(1, 1200);
+	int dur_val = default_duration_secs > 0
+		? default_duration_secs
+		: scoreboard_get_default_penalty_duration();
+	dur_spin->setValue(dur_val);
 	dur_row->addWidget(dur_spin);
 	layout->addLayout(dur_row);
 
@@ -1294,7 +1323,7 @@ void open_clock_settings_dialog(QWidget *parent)
 	});
 
 	QLabel *pen_dur_label =
-		new QLabel("Default penalty (seconds):", &dialog);
+		new QLabel("Minor penalty (seconds):", &dialog);
 	QHBoxLayout *pen_dur_row = new QHBoxLayout();
 	pen_dur_row->addWidget(pen_dur_label);
 	QSpinBox *pen_dur_spin = new QSpinBox(&dialog);
@@ -1302,6 +1331,17 @@ void open_clock_settings_dialog(QWidget *parent)
 	pen_dur_spin->setValue(scoreboard_get_default_penalty_duration());
 	pen_dur_row->addWidget(pen_dur_spin);
 	layout->addLayout(pen_dur_row);
+
+	QLabel *major_pen_dur_label =
+		new QLabel("Major penalty (seconds):", &dialog);
+	QHBoxLayout *major_pen_dur_row = new QHBoxLayout();
+	major_pen_dur_row->addWidget(major_pen_dur_label);
+	QSpinBox *major_pen_dur_spin = new QSpinBox(&dialog);
+	major_pen_dur_spin->setRange(1, 1200);
+	major_pen_dur_spin->setValue(
+		scoreboard_get_default_major_penalty_duration());
+	major_pen_dur_row->addWidget(major_pen_dur_spin);
+	layout->addLayout(major_pen_dur_row);
 
 	/* Preset duration/direction/features per sport (mirrors core table) */
 	struct sport_ui_info {
@@ -1324,7 +1364,8 @@ void open_clock_settings_dialog(QWidget *parent)
 	QObject::connect(
 		sport_combo, qOverload<int>(&QComboBox::currentIndexChanged),
 		[len_spin, down_btn, up_btn, pen_dur_spin,
-		 pen_dur_label](int index) {
+		 pen_dur_label, major_pen_dur_spin,
+		 major_pen_dur_label](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1339,7 +1380,38 @@ void open_clock_settings_dialog(QWidget *parent)
 			}
 			pen_dur_label->setVisible(info.has_penalties);
 			pen_dur_spin->setVisible(info.has_penalties);
+			major_pen_dur_label->setVisible(info.has_penalties);
+			major_pen_dur_spin->setVisible(info.has_penalties);
 		});
+
+	/* Period labels button */
+	QHBoxLayout *labels_row = new QHBoxLayout();
+	labels_row->addWidget(new QLabel("Period labels:", &dialog));
+	QPushButton *labels_btn = new QPushButton("Edit...", &dialog);
+	labels_row->addWidget(labels_btn, 1);
+	layout->addLayout(labels_row);
+	QObject::connect(labels_btn, &QPushButton::clicked, [&dialog]() {
+		const char *dir = scoreboard_get_output_directory();
+		if (dir[0] == '\0') {
+			QMessageBox::warning(
+				&dialog, "No Output Directory",
+				"Set an output directory first.");
+			return;
+		}
+		QString path =
+			QString::fromUtf8(dir) + "/period_labels.txt";
+		QFile file(path);
+		if (!file.exists()) {
+			/* Create with current labels so user has a starting point */
+			if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+				char buf[512];
+				scoreboard_get_period_labels(buf, sizeof(buf));
+				file.write(buf);
+				file.close();
+			}
+		}
+		QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+	});
 
 	QFrame *sep = new QFrame(&dialog);
 	sep->setFrameShape(QFrame::HLine);
@@ -1452,6 +1524,8 @@ void open_clock_settings_dialog(QWidget *parent)
 					      : SCOREBOARD_CLOCK_COUNT_UP);
 		scoreboard_set_default_penalty_duration(
 			pen_dur_spin->value());
+		scoreboard_set_default_major_penalty_duration(
+			major_pen_dur_spin->value());
 		scoreboard_set_cli_executable(
 			cli_input->text().trimmed().toUtf8().constData());
 		scoreboard_set_cli_extra_args(
@@ -1631,6 +1705,30 @@ void hk_away_shot_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 		scoreboard_decrement_away_shots();
 }
 
+void hk_home_fo_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_increment_home_faceoffs();
+}
+
+void hk_home_fo_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_home_faceoffs();
+}
+
+void hk_away_fo_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_increment_away_faceoffs();
+}
+
+void hk_away_fo_minus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (pressed)
+		scoreboard_decrement_away_faceoffs();
+}
+
 void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
 	if (!pressed)
@@ -1639,7 +1737,6 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 		return;
 	log_period_end_event();
 	scoreboard_period_advance();
-	run_reeln_segment_command();
 }
 
 void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1708,6 +1805,26 @@ void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	scoreboard_away_penalty_clear(1);
 }
 
+void hk_home_major_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed)
+		return;
+	int slot = scoreboard_home_penalty_add(
+		0, scoreboard_get_default_major_penalty_duration());
+	if (slot >= 0)
+		log_penalty_event(true, 0);
+}
+
+void hk_away_major_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed)
+		return;
+	int slot = scoreboard_away_penalty_add(
+		0, scoreboard_get_default_major_penalty_duration());
+	if (slot >= 0)
+		log_penalty_event(false, 0);
+}
+
 void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
 			     bool pressed)
 {
@@ -1715,7 +1832,7 @@ void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
 		return;
 	if (scoreboard_clock_is_running())
 		return;
-	run_reeln_segment_command();
+	run_reeln_highlights_command();
 }
 
 void hk_home_foul_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1908,6 +2025,26 @@ void register_hotkeys()
 	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
 		"sb_away_foul2_minus", "Streamn: Away Foul2 -",
 		hk_away_foul2_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_major_pen_add",
+		"Streamn: Home Major Penalty Add",
+		hk_home_major_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_major_pen_add",
+		"Streamn: Away Major Penalty Add",
+		hk_away_major_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_fo_plus", "Streamn: Home Faceoff +",
+		hk_home_fo_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_fo_minus", "Streamn: Home Faceoff -",
+		hk_home_fo_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_fo_plus", "Streamn: Away Faceoff +",
+		hk_away_fo_plus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_fo_minus", "Streamn: Away Faceoff -",
+		hk_away_fo_minus, nullptr);
 
 	/* Register save/load callbacks to persist hotkey bindings */
 	obs_frontend_add_save_callback(save_hotkeys, nullptr);
@@ -2238,9 +2375,12 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QPushButton *home_shot_plus = new QPushButton("+", widget);
 	home_shot_minus->setFixedWidth(28);
 	home_shot_plus->setFixedWidth(28);
+	home_shot_minus->setToolTip("Home shots on goal -1");
+	home_shot_plus->setToolTip("Home shots on goal +1");
 	g_home_shots_label = new QLabel("0", widget);
 	g_home_shots_label->setAlignment(Qt::AlignCenter);
 	g_home_shots_label->setFixedWidth(32);
+	g_home_shots_label->setToolTip("Home shots on goal");
 	shots_row->addStretch(1);
 	shots_row->addWidget(home_shot_minus);
 	shots_row->addWidget(g_home_shots_label);
@@ -2250,6 +2390,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	shots_label->setAlignment(Qt::AlignCenter);
 	shots_label->setStyleSheet(kMutedStyle);
 	shots_label->setFixedWidth(36);
+	shots_label->setToolTip("Shots on Goal");
 	shots_row->addSpacing(4);
 	shots_row->addWidget(shots_label);
 	shots_row->addSpacing(4);
@@ -2258,14 +2399,63 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QPushButton *away_shot_plus = new QPushButton("+", widget);
 	away_shot_minus->setFixedWidth(28);
 	away_shot_plus->setFixedWidth(28);
+	away_shot_minus->setToolTip("Away shots on goal -1");
+	away_shot_plus->setToolTip("Away shots on goal +1");
 	g_away_shots_label = new QLabel("0", widget);
 	g_away_shots_label->setAlignment(Qt::AlignCenter);
 	g_away_shots_label->setFixedWidth(32);
+	g_away_shots_label->setToolTip("Away shots on goal");
 	shots_row->addWidget(away_shot_minus);
 	shots_row->addWidget(g_away_shots_label);
 	shots_row->addWidget(away_shot_plus);
 	shots_row->addStretch(1);
 	root->addWidget(g_shots_row_widget);
+
+	/* Faceoffs row: [-] 0 [+] FO [-] 0 [+] — wrapped for visibility toggle */
+	g_faceoffs_row_widget = new QWidget(widget);
+	QHBoxLayout *fo_row = new QHBoxLayout(g_faceoffs_row_widget);
+	fo_row->setContentsMargins(0, 0, 0, 0);
+	fo_row->setSpacing(2);
+
+	QPushButton *home_fo_minus = new QPushButton("-", widget);
+	QPushButton *home_fo_plus = new QPushButton("+", widget);
+	home_fo_minus->setFixedWidth(28);
+	home_fo_plus->setFixedWidth(28);
+	home_fo_minus->setToolTip("Home faceoff wins -1");
+	home_fo_plus->setToolTip("Home faceoff wins +1");
+	g_home_faceoffs_label = new QLabel("0", widget);
+	g_home_faceoffs_label->setAlignment(Qt::AlignCenter);
+	g_home_faceoffs_label->setFixedWidth(32);
+	g_home_faceoffs_label->setToolTip("Home faceoff wins");
+	fo_row->addStretch(1);
+	fo_row->addWidget(home_fo_minus);
+	fo_row->addWidget(g_home_faceoffs_label);
+	fo_row->addWidget(home_fo_plus);
+
+	QLabel *fo_label = new QLabel("FO", widget);
+	fo_label->setAlignment(Qt::AlignCenter);
+	fo_label->setStyleSheet(kMutedStyle);
+	fo_label->setFixedWidth(36);
+	fo_label->setToolTip("Faceoff Wins");
+	fo_row->addSpacing(4);
+	fo_row->addWidget(fo_label);
+	fo_row->addSpacing(4);
+
+	QPushButton *away_fo_minus = new QPushButton("-", widget);
+	QPushButton *away_fo_plus = new QPushButton("+", widget);
+	away_fo_minus->setFixedWidth(28);
+	away_fo_plus->setFixedWidth(28);
+	away_fo_minus->setToolTip("Away faceoff wins -1");
+	away_fo_plus->setToolTip("Away faceoff wins +1");
+	g_away_faceoffs_label = new QLabel("0", widget);
+	g_away_faceoffs_label->setAlignment(Qt::AlignCenter);
+	g_away_faceoffs_label->setFixedWidth(32);
+	g_away_faceoffs_label->setToolTip("Away faceoff wins");
+	fo_row->addWidget(away_fo_minus);
+	fo_row->addWidget(g_away_faceoffs_label);
+	fo_row->addWidget(away_fo_plus);
+	fo_row->addStretch(1);
+	root->addWidget(g_faceoffs_row_widget);
 
 	/* Fouls row: [-] 0 [+] | Label | [-] 0 [+] — wrapped for visibility toggle */
 	g_fouls_row_widget = new QWidget(widget);
@@ -2372,12 +2562,36 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	home_pen_title->setStyleSheet(kMutedStyle);
 	home_pen_title->setAlignment(Qt::AlignCenter);
 	home_pen_col->addWidget(home_pen_title);
-	g_home_pen_layout = new QVBoxLayout();
+	QWidget *home_pen_container = new QWidget(widget);
+	g_home_pen_layout = new QVBoxLayout(home_pen_container);
 	g_home_pen_layout->setContentsMargins(0, 0, 0, 0);
 	g_home_pen_layout->setSpacing(1);
-	home_pen_col->addLayout(g_home_pen_layout);
-	QPushButton *home_pen_add = new QPushButton("+ Penalty", widget);
-	home_pen_col->addWidget(home_pen_add);
+	QScrollArea *home_pen_scroll = new QScrollArea(widget);
+	home_pen_scroll->setWidget(home_pen_container);
+	home_pen_scroll->setWidgetResizable(true);
+	home_pen_scroll->setFrameShape(QFrame::NoFrame);
+	home_pen_scroll->setMaximumHeight(66);
+	home_pen_scroll->setHorizontalScrollBarPolicy(
+		Qt::ScrollBarAlwaysOff);
+	home_pen_col->addWidget(home_pen_scroll);
+	QHBoxLayout *home_pen_btns = new QHBoxLayout();
+	home_pen_btns->setContentsMargins(0, 0, 0, 0);
+	home_pen_btns->setSpacing(2);
+	QPushButton *home_pen_add = new QPushButton("+ Minor", widget);
+	QPushButton *home_major_pen_add =
+		new QPushButton("+ Major", widget);
+	home_pen_btns->addWidget(home_pen_add, 1);
+	home_pen_btns->addWidget(home_major_pen_add, 1);
+	{
+		QPalette p = home_major_pen_add->palette();
+		QColor base = p.color(QPalette::Button);
+		QColor tint = QColor::fromHslF(
+			0.08, 0.5, qBound(0.0, base.lightnessF(), 1.0));
+		home_major_pen_add->setStyleSheet(
+			"QPushButton { background-color: " + tint.name() +
+			"; }");
+	}
+	home_pen_col->addLayout(home_pen_btns);
 	pen_section->addLayout(home_pen_col, 1);
 
 	/* Away penalties column */
@@ -2388,12 +2602,36 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	away_pen_title->setStyleSheet(kMutedStyle);
 	away_pen_title->setAlignment(Qt::AlignCenter);
 	away_pen_col->addWidget(away_pen_title);
-	g_away_pen_layout = new QVBoxLayout();
+	QWidget *away_pen_container = new QWidget(widget);
+	g_away_pen_layout = new QVBoxLayout(away_pen_container);
 	g_away_pen_layout->setContentsMargins(0, 0, 0, 0);
 	g_away_pen_layout->setSpacing(1);
-	away_pen_col->addLayout(g_away_pen_layout);
-	QPushButton *away_pen_add = new QPushButton("+ Penalty", widget);
-	away_pen_col->addWidget(away_pen_add);
+	QScrollArea *away_pen_scroll = new QScrollArea(widget);
+	away_pen_scroll->setWidget(away_pen_container);
+	away_pen_scroll->setWidgetResizable(true);
+	away_pen_scroll->setFrameShape(QFrame::NoFrame);
+	away_pen_scroll->setMaximumHeight(66);
+	away_pen_scroll->setHorizontalScrollBarPolicy(
+		Qt::ScrollBarAlwaysOff);
+	away_pen_col->addWidget(away_pen_scroll);
+	QHBoxLayout *away_pen_btns = new QHBoxLayout();
+	away_pen_btns->setContentsMargins(0, 0, 0, 0);
+	away_pen_btns->setSpacing(2);
+	QPushButton *away_pen_add = new QPushButton("+ Minor", widget);
+	QPushButton *away_major_pen_add =
+		new QPushButton("+ Major", widget);
+	away_pen_btns->addWidget(away_pen_add, 1);
+	away_pen_btns->addWidget(away_major_pen_add, 1);
+	{
+		QPalette p = away_major_pen_add->palette();
+		QColor base = p.color(QPalette::Button);
+		QColor tint = QColor::fromHslF(
+			0.08, 0.5, qBound(0.0, base.lightnessF(), 1.0));
+		away_major_pen_add->setStyleSheet(
+			"QPushButton { background-color: " + tint.name() +
+			"; }");
+	}
+	away_pen_col->addLayout(away_pen_btns);
 	pen_section->addLayout(away_pen_col, 1);
 
 	pen_wrapper->addLayout(pen_section);
@@ -2498,7 +2736,6 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 			return;
 		log_period_end_event();
 		scoreboard_period_advance();
-		run_reeln_segment_command();
 		update_all_labels();
 	});
 	QObject::connect(period_rew_btn, &QPushButton::clicked, []() {
@@ -2539,6 +2776,22 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	});
 	QObject::connect(away_shot_minus, &QPushButton::clicked, []() {
 		scoreboard_decrement_away_shots();
+		update_all_labels();
+	});
+	QObject::connect(home_fo_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_home_faceoffs();
+		update_all_labels();
+	});
+	QObject::connect(home_fo_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_home_faceoffs();
+		update_all_labels();
+	});
+	QObject::connect(away_fo_plus, &QPushButton::clicked, []() {
+		scoreboard_increment_away_faceoffs();
+		update_all_labels();
+	});
+	QObject::connect(away_fo_minus, &QPushButton::clicked, []() {
+		scoreboard_decrement_away_faceoffs();
 		update_all_labels();
 	});
 	QObject::connect(home_foul_plus, &QPushButton::clicked, []() {
@@ -2597,10 +2850,22 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(away_pen_add, &QPushButton::clicked, [widget]() {
 		open_add_penalty_dialog(widget, false);
 	});
+	QObject::connect(home_major_pen_add, &QPushButton::clicked,
+			 [widget]() {
+		open_add_penalty_dialog(
+			widget, true,
+			scoreboard_get_default_major_penalty_duration());
+	});
+	QObject::connect(away_major_pen_add, &QPushButton::clicked,
+			 [widget]() {
+		open_add_penalty_dialog(
+			widget, false,
+			scoreboard_get_default_major_penalty_duration());
+	});
 	QObject::connect(g_highlights_btn, &QPushButton::clicked, []() {
 		if (confirm_mid_period_action(g_dock_widget,
 					      "generate highlights"))
-			run_reeln_segment_command();
+			run_reeln_highlights_command();
 	});
 	QObject::connect(g_game_finished, &QCheckBox::toggled,
 			 []() { update_all_labels(); });
@@ -2742,6 +3007,9 @@ void scoreboard_dock_shutdown(void)
 	g_away_score_label = nullptr;
 	g_home_shots_label = nullptr;
 	g_away_shots_label = nullptr;
+	g_faceoffs_row_widget = nullptr;
+	g_home_faceoffs_label = nullptr;
+	g_away_faceoffs_label = nullptr;
 	g_fouls_row_widget = nullptr;
 	g_home_fouls_label = nullptr;
 	g_away_fouls_label = nullptr;

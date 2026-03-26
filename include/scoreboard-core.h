@@ -40,6 +40,7 @@ struct scoreboard_sport_preset {
 	int duration_seconds;
 	int ot_max;
 	bool has_shots;
+	bool has_faceoffs;
 	bool has_penalties;
 	enum scoreboard_clock_direction default_direction;
 	bool has_fouls;
@@ -47,6 +48,8 @@ struct scoreboard_sport_preset {
 	char foul_label2[16];
 	bool log_scores;
 	char score_label[16];
+	int default_penalty_secs;
+	int default_major_penalty_secs;
 };
 
 struct scoreboard_penalty {
@@ -87,9 +90,17 @@ void scoreboard_format_period(char *buf, size_t size);
 void scoreboard_set_overtime_enabled(bool enabled);
 bool scoreboard_get_overtime_enabled(void);
 
+/* Period labels (configurable per-period display names) */
+void scoreboard_set_period_labels(const char *labels);
+void scoreboard_get_period_labels(char *buf, size_t size);
+int scoreboard_get_period_label_count(void);
+const char *scoreboard_get_period_label(int index);
+
 /* Default penalty duration (seconds) */
 void scoreboard_set_default_penalty_duration(int seconds);
 int scoreboard_get_default_penalty_duration(void);
+void scoreboard_set_default_major_penalty_duration(int seconds);
+int scoreboard_get_default_major_penalty_duration(void);
 
 /* Team names */
 void scoreboard_set_home_name(const char *name);
@@ -117,6 +128,17 @@ void scoreboard_set_away_shots(int shots);
 void scoreboard_increment_away_shots(void);
 void scoreboard_decrement_away_shots(void);
 
+/* Faceoff wins (per-team counter) */
+int scoreboard_get_home_faceoffs(void);
+void scoreboard_set_home_faceoffs(int faceoffs);
+void scoreboard_increment_home_faceoffs(void);
+void scoreboard_decrement_home_faceoffs(void);
+int scoreboard_get_away_faceoffs(void);
+void scoreboard_set_away_faceoffs(int faceoffs);
+void scoreboard_increment_away_faceoffs(void);
+void scoreboard_decrement_away_faceoffs(void);
+bool scoreboard_get_has_faceoffs(void);
+
 /* Fouls / cards / flags (simple per-team counter) */
 int scoreboard_get_home_fouls(void);
 void scoreboard_set_home_fouls(int fouls);
@@ -138,6 +160,9 @@ void scoreboard_increment_away_fouls2(void);
 void scoreboard_decrement_away_fouls2(void);
 
 #define SCOREBOARD_MAX_PENALTIES 8
+#define SCOREBOARD_MAX_RUNNING_PENALTIES 2
+#define SCOREBOARD_MAX_PERIOD_LABELS 16
+#define SCOREBOARD_PERIOD_LABEL_SIZE 16
 
 /* Penalties (up to SCOREBOARD_MAX_PENALTIES per team) */
 int scoreboard_home_penalty_add(int player_number, int duration_secs);

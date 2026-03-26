@@ -4,6 +4,27 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Configurable period labels — period display names are now customizable per-game via `period_labels.txt`, with sport-specific defaults (e.g. hockey: 1, 2, 3, OT, OT2, OT3, OT4)
+- "Edit..." button in Game Settings to open `period_labels.txt` in default text editor for quick customization
+- File watcher on `period_labels.txt` — edits in external editors apply immediately without restarting OBS
+- Faceoff wins counter for hockey and lacrosse — tracks home/away faceoff wins with +/- buttons, displayed below shots on goal
+- `home_faceoffs.txt` and `away_faceoffs.txt` output files for OBS Text sources
+- 4 new OBS hotkeys: Home/Away Faceoff Win +/-
+- Tooltips on all stat row buttons and labels (SOG, FO) for discoverability
+- Penalty queue system — only 2 penalties per team run simultaneously (matching hockey rules), additional penalties queue and auto-start when earlier ones expire
+- `SCOREBOARD_MAX_RUNNING_PENALTIES` constant for configurable penalty concurrency
+
+### Fixed
+- Start/Stop button now resets to green "Start" when clock auto-stops at 0:00 — previously stayed red "Stop" until manually clicked
+- Penalty timers now freeze when period clock reaches 0:00 — previously kept ticking after clock auto-stop
+
+### Changed
+- Period max is now derived from period label count instead of hardcoded segment_count + ot_max
+- Toggling overtime on/off regenerates period labels and clamps current period accordingly
+- Penalty text file output (`home_penalty_numbers.txt`, etc.) now shows only the 2 running penalties, not queued ones
+- Dock UI shows all active penalties but marks queued penalties with "(queued)" suffix
+
 ## [0.4.1] - 2026-03-21
 
 ### Fixed
