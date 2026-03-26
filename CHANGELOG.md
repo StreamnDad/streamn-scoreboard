@@ -4,6 +4,8 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-26
+
 ### Added
 - Configurable period labels — period display names are now customizable per-game via `period_labels.txt`, with sport-specific defaults (e.g. hockey: 1, 2, 3, OT, OT2, OT3, OT4)
 - "Edit..." button in Game Settings to open `period_labels.txt` in default text editor for quick customization
