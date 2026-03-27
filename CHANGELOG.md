@@ -4,6 +4,16 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-27
+
+### Fixed
+- Game clock now keeps accurate time — previously drifted fast due to assuming exactly 100ms between Qt timer fires instead of measuring actual elapsed wall-clock time
+- "Generate Period Highlights" button now correctly runs `reeln game segment <N>` instead of `reeln game highlights` — the game highlights command requires individual segment files to exist first
+- Highlights hotkey now also dispatches based on "Game Finished" checkbox state
+
+### Changed
+- Highlights button label now includes the period number (e.g. "Generate Period 1 Highlights") for clarity
+
 ## [0.5.0] - 2026-03-26
 
 ### Added
