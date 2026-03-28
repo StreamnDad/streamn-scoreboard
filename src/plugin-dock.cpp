@@ -125,6 +125,8 @@ QPushButton *g_clock_btn = nullptr;
 QTimer *g_tick_timer = nullptr;
 QFileSystemWatcher *g_file_watcher = nullptr;
 QElapsedTimer g_write_cooldown;
+QElapsedTimer g_clock_elapsed;
+qint64 g_clock_remainder_ms = 0;
 scoreboard_log_fn g_log_fn = nullptr;
 
 QVector<process_job *> g_jobs;
@@ -790,6 +792,30 @@ void update_copy_timestamps_visibility()
 	g_copy_timestamps_btn->setVisible(false);
 }
 
+void run_reeln_segment_command()
+{
+	const QString executable =
+		QString::fromUtf8(scoreboard_get_cli_executable()).trimmed();
+	if (executable.isEmpty())
+		return;
+	const QString extra =
+		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
+	QStringList extra_parts;
+	if (!extra.isEmpty())
+		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+
+	int period = scoreboard_get_period();
+	char period_buf[64];
+	scoreboard_format_period(period_buf, sizeof(period_buf));
+
+	QStringList args;
+	args << "game" << "segment" << QString::number(period) << extra_parts;
+	QString title = QString::fromUtf8(scoreboard_get_segment_name()) +
+			QString(" ") + QString::fromUtf8(period_buf) +
+			QString(" Highlights");
+	add_job_row(title, args);
+}
+
 void run_reeln_highlights_command()
 {
 	const QString executable =
@@ -841,15 +867,18 @@ void update_all_labels()
 		}
 	}
 	if (g_highlights_btn && g_highlights_btn->isVisible()) {
-		if (g_game_finished && g_game_finished->isChecked())
+		if (g_game_finished && g_game_finished->isChecked()) {
 			g_highlights_btn->setText(
 				"Generate Game Highlights");
-		else
+		} else {
+			scoreboard_format_period(buf, sizeof(buf));
 			g_highlights_btn->setText(
 				"Generate " +
 				QString::fromUtf8(
 					scoreboard_get_segment_name()) +
+				" " + QString::fromUtf8(buf) +
 				" Highlights");
+		}
 	}
 	if (g_period_label) {
 		scoreboard_format_period(buf, sizeof(buf));
@@ -1100,7 +1129,19 @@ void write_files_now()
 void on_tick()
 {
 	bool was_running = scoreboard_clock_is_running();
-	scoreboard_clock_tick(1);
+
+	if (was_running) {
+		qint64 elapsed_ms = g_clock_elapsed.restart();
+		elapsed_ms += g_clock_remainder_ms;
+		int elapsed_tenths = (int)(elapsed_ms / 100);
+		g_clock_remainder_ms = elapsed_ms % 100;
+		if (elapsed_tenths > 0)
+			scoreboard_clock_tick(elapsed_tenths);
+	} else {
+		g_clock_elapsed.restart();
+		g_clock_remainder_ms = 0;
+	}
+
 	bool is_running = scoreboard_clock_is_running();
 	if (scoreboard_is_dirty())
 		write_files_now();
@@ -1832,7 +1873,10 @@ void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
 		return;
 	if (scoreboard_clock_is_running())
 		return;
-	run_reeln_highlights_command();
+	if (g_game_finished && g_game_finished->isChecked())
+		run_reeln_highlights_command();
+	else
+		run_reeln_segment_command();
 }
 
 void hk_home_foul_plus(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -2863,9 +2907,16 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 			scoreboard_get_default_major_penalty_duration());
 	});
 	QObject::connect(g_highlights_btn, &QPushButton::clicked, []() {
-		if (confirm_mid_period_action(g_dock_widget,
-					      "generate highlights"))
-			run_reeln_highlights_command();
+		if (g_game_finished && g_game_finished->isChecked()) {
+			if (confirm_mid_period_action(g_dock_widget,
+						      "generate highlights"))
+				run_reeln_highlights_command();
+		} else {
+			if (confirm_mid_period_action(
+				    g_dock_widget,
+				    "generate segment highlights"))
+				run_reeln_segment_command();
+		}
 	});
 	QObject::connect(g_game_finished, &QCheckBox::toggled,
 			 []() { update_all_labels(); });
@@ -2929,9 +2980,10 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	QObject::connect(about_action, &QAction::triggered,
 			 [widget]() { open_about_dialog(widget); });
 
-	/* Timer */
+	/* Timer — uses wall-clock elapsed time for accurate ticking */
 	g_tick_timer = new QTimer(widget);
 	g_tick_timer->setInterval(100);
+	g_clock_elapsed.start();
 	QObject::connect(g_tick_timer, &QTimer::timeout, on_tick);
 	g_tick_timer->start();
 
