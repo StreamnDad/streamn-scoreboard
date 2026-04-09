@@ -556,17 +556,19 @@ static void test_queued_penalty_starts_after_expiry(void)
 	/* Tick enough to expire slot 0 */
 	scoreboard_penalty_tick(10);
 
-	/* Slot 0 expired */
-	assert(!scoreboard_get_home_penalty(0)->active);
-	/* Slot 1 ticked */
-	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1190);
-	/* Slot 2 still queued — didn't tick this round */
-	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1200);
+	/* After compact: slot 1 (#20) moved to slot 0, slot 2 (#30) to slot 1 */
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1190);
+	/* Slot 1 (was queued) didn't tick this round */
+	assert(scoreboard_get_home_penalty(1)->player_number == 30);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1200);
+	/* Slot 2 now empty */
+	assert(!scoreboard_get_home_penalty(2)->active);
 
-	/* Next tick: slot 2 is now one of the first 2 active, so it ticks */
+	/* Next tick: both slot 0 and slot 1 are now running */
 	scoreboard_penalty_tick(10);
-	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1180);
-	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1190);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1180);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1190);
 }
 
 static void test_penalty_adjust_only_running(void)
@@ -598,6 +600,386 @@ static void test_format_only_running_penalties(void)
 	scoreboard_format_all_penalty_times(true, times, sizeof(times));
 	assert(strcmp(nums, "#10\n#20") == 0);
 	assert(strcmp(times, "2:00\n1:00") == 0);
+}
+
+/* ---- compact tests ---- */
+
+static void test_compact_fills_gap(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 60);
+	scoreboard_home_penalty_add(30, 300);
+	scoreboard_home_penalty_clear(0);
+	scoreboard_penalty_compact();
+
+	assert(scoreboard_get_home_penalty(0)->active);
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(1)->active);
+	assert(scoreboard_get_home_penalty(1)->player_number == 30);
+	assert(!scoreboard_get_home_penalty(2)->active);
+}
+
+static void test_compact_no_gaps(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 60);
+	scoreboard_home_penalty_add(30, 300);
+	scoreboard_penalty_compact();
+
+	assert(scoreboard_get_home_penalty(0)->player_number == 10);
+	assert(scoreboard_get_home_penalty(1)->player_number == 20);
+	assert(scoreboard_get_home_penalty(2)->player_number == 30);
+}
+
+static void test_compact_empty(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_penalty_compact();
+	assert(scoreboard_get_home_penalty_count() == 0);
+	assert(scoreboard_get_away_penalty_count() == 0);
+}
+
+static void test_compact_multiple_gaps(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 60);
+	scoreboard_home_penalty_add(30, 300);
+	scoreboard_home_penalty_add(40, 120);
+	scoreboard_home_penalty_clear(0);
+	scoreboard_home_penalty_clear(2);
+	scoreboard_penalty_compact();
+
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(1)->player_number == 40);
+	assert(!scoreboard_get_home_penalty(2)->active);
+	assert(!scoreboard_get_home_penalty(3)->active);
+}
+
+static void test_compact_away(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(10, 120);
+	scoreboard_away_penalty_add(20, 60);
+	scoreboard_away_penalty_clear(0);
+	scoreboard_penalty_compact();
+
+	assert(scoreboard_get_away_penalty(0)->player_number == 20);
+	assert(!scoreboard_get_away_penalty(1)->active);
+}
+
+static void test_tick_expire_compacts(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 1);   /* 10 tenths — expires in 1 tick */
+	scoreboard_home_penalty_add(20, 120); /* running */
+	scoreboard_home_penalty_add(30, 120); /* queued */
+
+	scoreboard_penalty_tick(10);
+
+	/* After expire + compact: #20 in slot 0, #30 in slot 1 */
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(1)->player_number == 30);
+	assert(!scoreboard_get_home_penalty(2)->active);
+}
+
+static void test_adjust_expire_compacts(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 5);   /* 50 tenths */
+	scoreboard_home_penalty_add(20, 120); /* running */
+	scoreboard_home_penalty_add(30, 120); /* queued */
+
+	scoreboard_penalty_adjust(-50);
+
+	/* #10 expired + compact: #20 in slot 0, #30 in slot 1 */
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(1)->player_number == 30);
+	assert(!scoreboard_get_home_penalty(2)->active);
+}
+
+static void test_compact_preserves_phase2(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add_compound(20, 120, 120);
+	scoreboard_home_penalty_clear(0);
+	scoreboard_penalty_compact();
+
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 1200);
+}
+
+/* ---- set_time tests ---- */
+
+static void test_home_penalty_set_time(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_home_penalty_set_time(0, 60);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 600);
+}
+
+static void test_away_penalty_set_time(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(22, 120);
+	scoreboard_away_penalty_set_time(0, 60);
+	assert(scoreboard_get_away_penalty(0)->remaining_tenths == 600);
+}
+
+static void test_penalty_set_time_invalid_slot(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_set_time(-1, 60);
+	scoreboard_home_penalty_set_time(SCOREBOARD_MAX_PENALTIES, 60);
+	scoreboard_away_penalty_set_time(-1, 60);
+	scoreboard_away_penalty_set_time(SCOREBOARD_MAX_PENALTIES, 60);
+}
+
+static void test_penalty_set_time_inactive_slot(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_set_time(0, 60);
+	assert(!scoreboard_get_home_penalty(0)->active);
+}
+
+static void test_penalty_set_time_zero_clears(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_home_penalty_add(20, 60);
+	scoreboard_home_penalty_set_time(0, 0);
+	/* After clear + compact: #20 moves to slot 0 */
+	assert(scoreboard_get_home_penalty(0)->player_number == 20);
+	assert(!scoreboard_get_home_penalty(1)->active);
+}
+
+static void test_dirty_penalty_set_time(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_set_output_directory("/tmp");
+	scoreboard_mark_dirty();
+	scoreboard_write_all_files();
+	assert(!scoreboard_is_dirty());
+	scoreboard_home_penalty_set_time(0, 60);
+	assert(scoreboard_is_dirty());
+}
+
+/* ---- compound penalty tests ---- */
+
+static void test_compound_add_home(void)
+{
+	scoreboard_reset_state_for_tests();
+	int slot = scoreboard_home_penalty_add_compound(12, 120, 120);
+	assert(slot == 0);
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->player_number == 12);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 1200);
+}
+
+static void test_compound_add_away(void)
+{
+	scoreboard_reset_state_for_tests();
+	int slot = scoreboard_away_penalty_add_compound(22, 120, 300);
+	assert(slot == 0);
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->player_number == 22);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 3000);
+}
+
+static void test_compound_add_full(void)
+{
+	scoreboard_reset_state_for_tests();
+	for (int i = 0; i < SCOREBOARD_MAX_PENALTIES; i++)
+		scoreboard_home_penalty_add(i + 1, 120);
+	assert(scoreboard_home_penalty_add_compound(99, 120, 120) == -1);
+}
+
+static void test_compound_phase_transition(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+
+	/* Tick all of phase 1 */
+	scoreboard_penalty_tick(1200);
+
+	/* Penalty should still be active — now in phase 2 */
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_compound_phase2_expires(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+
+	/* Tick through both phases */
+	scoreboard_penalty_tick(1200);
+	scoreboard_penalty_tick(1200);
+
+	assert(!scoreboard_get_home_penalty(0)->active);
+}
+
+static void test_compound_holds_slot(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120); /* slot 0 */
+	scoreboard_home_penalty_add(20, 60);                /* slot 1 */
+
+	/* Tick to expire phase 1 of compound */
+	scoreboard_penalty_tick(1200);
+
+	/* Compound still in slot 0, regular in slot 1 expired */
+	assert(scoreboard_get_home_penalty(0)->active);
+	assert(scoreboard_get_home_penalty(0)->player_number == 12);
+	assert(!scoreboard_get_home_penalty(1)->active);
+}
+
+static void test_compound_clear_removes_both(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+	scoreboard_home_penalty_clear(0);
+	assert(!scoreboard_get_home_penalty(0)->active);
+	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 0);
+}
+
+static void test_compound_adjust_phase_transition(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 5, 120);
+
+	scoreboard_penalty_adjust(-50);
+
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_compound_away_phase_transition(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(22, 120, 300);
+
+	scoreboard_penalty_tick(1200);
+
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 3000);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_compound_away_adjust_transition(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(22, 5, 120);
+
+	scoreboard_penalty_adjust(-50);
+
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_compound_counts_as_one_running(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120); /* running */
+	scoreboard_home_penalty_add(20, 120);               /* running */
+	scoreboard_home_penalty_add(30, 120);               /* queued */
+
+	scoreboard_penalty_tick(10);
+
+	/* Compound and #20 ticked, #30 queued */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1190);
+	assert(scoreboard_get_home_penalty(1)->remaining_tenths == 1190);
+	assert(scoreboard_get_home_penalty(2)->remaining_tenths == 1200);
+}
+
+static void test_compound_new_game_clears_phase2(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+	scoreboard_new_game();
+	assert(!scoreboard_get_home_penalty(0)->active);
+	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
+}
+
+static void test_compound_add_away_full(void)
+{
+	scoreboard_reset_state_for_tests();
+	for (int i = 0; i < SCOREBOARD_MAX_PENALTIES; i++)
+		scoreboard_away_penalty_add(i + 1, 120);
+	assert(scoreboard_away_penalty_add_compound(99, 120, 120) == -1);
+}
+
+static void test_away_penalty_set_time_inactive(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_set_time(0, 60);
+	assert(!scoreboard_get_away_penalty(0)->active);
+}
+
+static void test_away_penalty_set_time_zero_clears(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(22, 120);
+	scoreboard_away_penalty_add(15, 60);
+	scoreboard_away_penalty_set_time(0, 0);
+	/* After clear + compact: #15 moves to slot 0 */
+	assert(scoreboard_get_away_penalty(0)->player_number == 15);
+	assert(!scoreboard_get_away_penalty(1)->active);
+}
+
+static void test_set_time_zero_compound_transitions(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+	scoreboard_home_penalty_set_time(0, 0);
+	/* Should transition to phase 2, not clear */
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 1200);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_set_time_zero_compound_away_transitions(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(22, 120, 300);
+	scoreboard_away_penalty_set_time(0, 0);
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 3000);
+	assert(p->phase2_tenths == 0);
+}
+
+static void test_set_time_zero_regular_still_clears(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	scoreboard_home_penalty_set_time(0, 0);
+	assert(!scoreboard_get_home_penalty(0)->active);
+}
+
+static void test_regular_penalty_has_zero_phase2(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(12, 120);
+	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
 }
 
 int main(void)
@@ -655,6 +1037,45 @@ int main(void)
 	test_queued_penalty_starts_after_expiry();
 	test_penalty_adjust_only_running();
 	test_format_only_running_penalties();
+
+	/* compact */
+	test_compact_fills_gap();
+	test_compact_no_gaps();
+	test_compact_empty();
+	test_compact_multiple_gaps();
+	test_compact_away();
+	test_tick_expire_compacts();
+	test_adjust_expire_compacts();
+	test_compact_preserves_phase2();
+
+	/* set_time */
+	test_home_penalty_set_time();
+	test_away_penalty_set_time();
+	test_penalty_set_time_invalid_slot();
+	test_penalty_set_time_inactive_slot();
+	test_penalty_set_time_zero_clears();
+	test_dirty_penalty_set_time();
+
+	/* compound penalties */
+	test_compound_add_home();
+	test_compound_add_away();
+	test_compound_add_full();
+	test_compound_phase_transition();
+	test_compound_phase2_expires();
+	test_compound_holds_slot();
+	test_compound_clear_removes_both();
+	test_compound_adjust_phase_transition();
+	test_compound_away_phase_transition();
+	test_compound_away_adjust_transition();
+	test_compound_counts_as_one_running();
+	test_compound_new_game_clears_phase2();
+	test_compound_add_away_full();
+	test_away_penalty_set_time_inactive();
+	test_away_penalty_set_time_zero_clears();
+	test_set_time_zero_compound_transitions();
+	test_set_time_zero_compound_away_transitions();
+	test_set_time_zero_regular_still_clears();
+	test_regular_penalty_has_zero_phase2();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

@@ -173,6 +173,17 @@ static int parse_period_text(const char *text)
 static void parse_penalty_files(const char *numbers_text,
 				const char *times_text, bool home)
 {
+	/* Save phase2_tenths before clearing — text files cannot carry
+	   compound phase info, so we preserve it for matching penalties */
+	struct scoreboard_penalty *penalties =
+		home ? g_state.home_penalties : g_state.away_penalties;
+	int saved_phase2[SCOREBOARD_PENALTY_SLOTS];
+	int saved_player[SCOREBOARD_PENALTY_SLOTS];
+	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
+		saved_phase2[i] = penalties[i].phase2_tenths;
+		saved_player[i] = penalties[i].player_number;
+	}
+
 	/* Clear all existing penalties for this team */
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		if (home)
@@ -212,12 +223,30 @@ static void parse_penalty_files(const char *numbers_text,
 		if (sscanf(tline, "%d:%d", &minutes, &seconds) == 2) {
 			int duration_secs = minutes * 60 + seconds;
 			if (duration_secs > 0) {
+				int slot;
 				if (home)
-					scoreboard_home_penalty_add(
+					slot = scoreboard_home_penalty_add(
 						player, duration_secs);
 				else
-					scoreboard_away_penalty_add(
+					slot = scoreboard_away_penalty_add(
 						player, duration_secs);
+				/* Restore phase2_tenths if the same player
+				   had compound data before the re-parse */
+				if (slot >= 0) {
+					for (int j = 0;
+					     j < SCOREBOARD_PENALTY_SLOTS;
+					     j++) {
+						if (saved_player[j] ==
+							    player &&
+						    saved_phase2[j] > 0) {
+							penalties[slot]
+								.phase2_tenths =
+								saved_phase2[j];
+							saved_phase2[j] = 0;
+							break;
+						}
+					}
+				}
 			}
 		}
 
@@ -429,20 +458,26 @@ void scoreboard_clock_set_tenths(int tenths)
 
 void scoreboard_clock_adjust_seconds(int delta)
 {
+	int before = g_state.clock_tenths;
 	g_state.clock_tenths += delta * 10;
 	if (g_state.clock_tenths < 0)
 		g_state.clock_tenths = 0;
 	mark_dirty();
-	scoreboard_penalty_adjust(delta * 10);
+	int actual_delta = g_state.clock_tenths - before;
+	if (actual_delta != 0)
+		scoreboard_penalty_adjust(actual_delta);
 }
 
 void scoreboard_clock_adjust_minutes(int delta)
 {
+	int before = g_state.clock_tenths;
 	g_state.clock_tenths += delta * 600;
 	if (g_state.clock_tenths < 0)
 		g_state.clock_tenths = 0;
 	mark_dirty();
-	scoreboard_penalty_adjust(delta * 600);
+	int actual_delta = g_state.clock_tenths - before;
+	if (actual_delta != 0)
+		scoreboard_penalty_adjust(actual_delta);
 }
 
 void scoreboard_clock_format(char *buf, size_t size)
@@ -951,14 +986,56 @@ int scoreboard_home_penalty_add(int player_number, int duration_secs)
 	return -1;
 }
 
+int scoreboard_home_penalty_add_compound(int player_number, int phase1_secs,
+					 int phase2_secs)
+{
+	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
+		if (!g_state.home_penalties[i].active) {
+			g_state.home_penalties[i].player_number = player_number;
+			g_state.home_penalties[i].remaining_tenths =
+				phase1_secs * 10;
+			g_state.home_penalties[i].phase2_tenths =
+				phase2_secs * 10;
+			g_state.home_penalties[i].active = true;
+			mark_dirty();
+			return i;
+		}
+	}
+	return -1;
+}
+
 void scoreboard_home_penalty_clear(int slot)
 {
 	if (slot >= 0 && slot < SCOREBOARD_PENALTY_SLOTS) {
 		g_state.home_penalties[slot].active = false;
 		g_state.home_penalties[slot].player_number = 0;
 		g_state.home_penalties[slot].remaining_tenths = 0;
+		g_state.home_penalties[slot].phase2_tenths = 0;
 		mark_dirty();
 	}
+}
+
+void scoreboard_home_penalty_set_time(int slot, int duration_secs)
+{
+	if (slot < 0 || slot >= SCOREBOARD_PENALTY_SLOTS)
+		return;
+	if (!g_state.home_penalties[slot].active)
+		return;
+	if (duration_secs <= 0) {
+		if (g_state.home_penalties[slot].phase2_tenths > 0) {
+			g_state.home_penalties[slot].remaining_tenths =
+				g_state.home_penalties[slot].phase2_tenths;
+			g_state.home_penalties[slot].phase2_tenths = 0;
+		} else {
+			scoreboard_home_penalty_clear(slot);
+			scoreboard_penalty_compact();
+			return;
+		}
+	} else {
+		g_state.home_penalties[slot].remaining_tenths =
+			duration_secs * 10;
+	}
+	mark_dirty();
 }
 
 const struct scoreboard_penalty *scoreboard_get_home_penalty(int slot)
@@ -983,14 +1060,56 @@ int scoreboard_away_penalty_add(int player_number, int duration_secs)
 	return -1;
 }
 
+int scoreboard_away_penalty_add_compound(int player_number, int phase1_secs,
+					 int phase2_secs)
+{
+	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
+		if (!g_state.away_penalties[i].active) {
+			g_state.away_penalties[i].player_number = player_number;
+			g_state.away_penalties[i].remaining_tenths =
+				phase1_secs * 10;
+			g_state.away_penalties[i].phase2_tenths =
+				phase2_secs * 10;
+			g_state.away_penalties[i].active = true;
+			mark_dirty();
+			return i;
+		}
+	}
+	return -1;
+}
+
 void scoreboard_away_penalty_clear(int slot)
 {
 	if (slot >= 0 && slot < SCOREBOARD_PENALTY_SLOTS) {
 		g_state.away_penalties[slot].active = false;
 		g_state.away_penalties[slot].player_number = 0;
 		g_state.away_penalties[slot].remaining_tenths = 0;
+		g_state.away_penalties[slot].phase2_tenths = 0;
 		mark_dirty();
 	}
+}
+
+void scoreboard_away_penalty_set_time(int slot, int duration_secs)
+{
+	if (slot < 0 || slot >= SCOREBOARD_PENALTY_SLOTS)
+		return;
+	if (!g_state.away_penalties[slot].active)
+		return;
+	if (duration_secs <= 0) {
+		if (g_state.away_penalties[slot].phase2_tenths > 0) {
+			g_state.away_penalties[slot].remaining_tenths =
+				g_state.away_penalties[slot].phase2_tenths;
+			g_state.away_penalties[slot].phase2_tenths = 0;
+		} else {
+			scoreboard_away_penalty_clear(slot);
+			scoreboard_penalty_compact();
+			return;
+		}
+	} else {
+		g_state.away_penalties[slot].remaining_tenths =
+			duration_secs * 10;
+	}
+	mark_dirty();
 }
 
 const struct scoreboard_penalty *scoreboard_get_away_penalty(int slot)
@@ -1023,6 +1142,7 @@ int scoreboard_get_away_penalty_count(void)
 void scoreboard_penalty_tick(int elapsed_tenths)
 {
 	bool ticked = false;
+	bool cleared = false;
 	int home_running = 0;
 	int away_running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
@@ -1032,8 +1152,20 @@ void scoreboard_penalty_tick(int elapsed_tenths)
 				elapsed_tenths;
 			home_running++;
 			ticked = true;
-			if (g_state.home_penalties[i].remaining_tenths <= 0)
-				scoreboard_home_penalty_clear(i);
+			if (g_state.home_penalties[i].remaining_tenths <= 0) {
+				if (g_state.home_penalties[i].phase2_tenths >
+				    0) {
+					g_state.home_penalties[i]
+						.remaining_tenths =
+						g_state.home_penalties[i]
+							.phase2_tenths;
+					g_state.home_penalties[i]
+						.phase2_tenths = 0;
+				} else {
+					scoreboard_home_penalty_clear(i);
+					cleared = true;
+				}
+			}
 		}
 		if (g_state.away_penalties[i].active &&
 		    away_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
@@ -1041,10 +1173,24 @@ void scoreboard_penalty_tick(int elapsed_tenths)
 				elapsed_tenths;
 			away_running++;
 			ticked = true;
-			if (g_state.away_penalties[i].remaining_tenths <= 0)
-				scoreboard_away_penalty_clear(i);
+			if (g_state.away_penalties[i].remaining_tenths <= 0) {
+				if (g_state.away_penalties[i].phase2_tenths >
+				    0) {
+					g_state.away_penalties[i]
+						.remaining_tenths =
+						g_state.away_penalties[i]
+							.phase2_tenths;
+					g_state.away_penalties[i]
+						.phase2_tenths = 0;
+				} else {
+					scoreboard_away_penalty_clear(i);
+					cleared = true;
+				}
+			}
 		}
 	}
+	if (cleared)
+		scoreboard_penalty_compact();
 	if (ticked)
 		mark_dirty();
 }
@@ -1052,6 +1198,7 @@ void scoreboard_penalty_tick(int elapsed_tenths)
 void scoreboard_penalty_adjust(int delta_tenths)
 {
 	bool adjusted = false;
+	bool cleared = false;
 	int home_running = 0;
 	int away_running = 0;
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
@@ -1061,8 +1208,20 @@ void scoreboard_penalty_adjust(int delta_tenths)
 				delta_tenths;
 			home_running++;
 			adjusted = true;
-			if (g_state.home_penalties[i].remaining_tenths <= 0)
-				scoreboard_home_penalty_clear(i);
+			if (g_state.home_penalties[i].remaining_tenths <= 0) {
+				if (g_state.home_penalties[i].phase2_tenths >
+				    0) {
+					g_state.home_penalties[i]
+						.remaining_tenths =
+						g_state.home_penalties[i]
+							.phase2_tenths;
+					g_state.home_penalties[i]
+						.phase2_tenths = 0;
+				} else {
+					scoreboard_home_penalty_clear(i);
+					cleared = true;
+				}
+			}
 		}
 		if (g_state.away_penalties[i].active &&
 		    away_running < SCOREBOARD_MAX_RUNNING_PENALTIES) {
@@ -1070,12 +1229,50 @@ void scoreboard_penalty_adjust(int delta_tenths)
 				delta_tenths;
 			away_running++;
 			adjusted = true;
-			if (g_state.away_penalties[i].remaining_tenths <= 0)
-				scoreboard_away_penalty_clear(i);
+			if (g_state.away_penalties[i].remaining_tenths <= 0) {
+				if (g_state.away_penalties[i].phase2_tenths >
+				    0) {
+					g_state.away_penalties[i]
+						.remaining_tenths =
+						g_state.away_penalties[i]
+							.phase2_tenths;
+					g_state.away_penalties[i]
+						.phase2_tenths = 0;
+				} else {
+					scoreboard_away_penalty_clear(i);
+					cleared = true;
+				}
+			}
 		}
 	}
+	if (cleared)
+		scoreboard_penalty_compact();
 	if (adjusted)
 		mark_dirty();
+}
+
+static void compact_penalties(struct scoreboard_penalty *penalties)
+{
+	int w = 0;
+	for (int r = 0; r < SCOREBOARD_PENALTY_SLOTS; r++) {
+		if (penalties[r].active) {
+			if (w != r)
+				penalties[w] = penalties[r];
+			w++;
+		}
+	}
+	for (int i = w; i < SCOREBOARD_PENALTY_SLOTS; i++) {
+		penalties[i].active = false;
+		penalties[i].player_number = 0;
+		penalties[i].remaining_tenths = 0;
+		penalties[i].phase2_tenths = 0;
+	}
+}
+
+void scoreboard_penalty_compact(void)
+{
+	compact_penalties(g_state.home_penalties);
+	compact_penalties(g_state.away_penalties);
 }
 
 void scoreboard_format_penalty_number(int slot, bool home, char *buf,
@@ -1443,6 +1640,8 @@ bool scoreboard_save_state(const char *path)
 			g_state.home_penalties[i].remaining_tenths);
 		fprintf(f, "  \"home_penalty%d_active\": %s,\n", i,
 			g_state.home_penalties[i].active ? "true" : "false");
+		fprintf(f, "  \"home_penalty%d_phase2_tenths\": %d,\n", i,
+			g_state.home_penalties[i].phase2_tenths);
 	}
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		fprintf(f, "  \"away_penalty%d_number\": %d,\n", i,
@@ -1451,6 +1650,8 @@ bool scoreboard_save_state(const char *path)
 			g_state.away_penalties[i].remaining_tenths);
 		fprintf(f, "  \"away_penalty%d_active\": %s,\n", i,
 			g_state.away_penalties[i].active ? "true" : "false");
+		fprintf(f, "  \"away_penalty%d_phase2_tenths\": %d,\n", i,
+			g_state.away_penalties[i].phase2_tenths);
 	}
 
 	fprintf(f, "  \"period_label_count\": %d",
@@ -1550,6 +1751,9 @@ bool scoreboard_load_state(const char *path)
 		snprintf(key, sizeof(key), "home_penalty%d_active", i);
 		g_state.home_penalties[i].active = parse_json_bool(
 			json, key, g_state.home_penalties[i].active);
+		snprintf(key, sizeof(key), "home_penalty%d_phase2_tenths", i);
+		g_state.home_penalties[i].phase2_tenths = parse_json_int(
+			json, key, g_state.home_penalties[i].phase2_tenths);
 
 		snprintf(key, sizeof(key), "away_penalty%d_number", i);
 		g_state.away_penalties[i].player_number = parse_json_int(
@@ -1560,6 +1764,9 @@ bool scoreboard_load_state(const char *path)
 		snprintf(key, sizeof(key), "away_penalty%d_active", i);
 		g_state.away_penalties[i].active = parse_json_bool(
 			json, key, g_state.away_penalties[i].active);
+		snprintf(key, sizeof(key), "away_penalty%d_phase2_tenths", i);
+		g_state.away_penalties[i].phase2_tenths = parse_json_int(
+			json, key, g_state.away_penalties[i].phase2_tenths);
 	}
 
 	{
@@ -1605,9 +1812,11 @@ void scoreboard_new_game(void)
 		g_state.home_penalties[i].active = false;
 		g_state.home_penalties[i].player_number = 0;
 		g_state.home_penalties[i].remaining_tenths = 0;
+		g_state.home_penalties[i].phase2_tenths = 0;
 		g_state.away_penalties[i].active = false;
 		g_state.away_penalties[i].player_number = 0;
 		g_state.away_penalties[i].remaining_tenths = 0;
+		g_state.away_penalties[i].phase2_tenths = 0;
 	}
 
 	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN)

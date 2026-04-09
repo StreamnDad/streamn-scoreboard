@@ -383,6 +383,22 @@ static void test_clock_adjust_penalty_clears_at_zero(void)
 	assert(!scoreboard_get_home_penalty(0)->active);
 }
 
+static void test_clock_adjust_at_zero_no_penalty_change(void)
+{
+	/* When clock is already at 0, subtracting should not affect penalties */
+	scoreboard_reset_state_for_tests();
+	scoreboard_clock_set_tenths(0);
+	scoreboard_home_penalty_add(12, 120); /* 1200 tenths */
+
+	scoreboard_clock_adjust_seconds(-10);
+	assert(scoreboard_clock_get_tenths() == 0);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1200);
+
+	scoreboard_clock_adjust_minutes(-1);
+	assert(scoreboard_clock_get_tenths() == 0);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1200);
+}
+
 static void test_penalty_adjust_both_teams(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -804,6 +820,7 @@ int main(void)
 	test_period_format_null();
 	test_clock_adjust_syncs_penalty();
 	test_clock_adjust_penalty_clears_at_zero();
+	test_clock_adjust_at_zero_no_penalty_change();
 	test_penalty_adjust_both_teams();
 	test_penalty_clear_after_adjust();
 	test_penalty_adjust_positive_delta();
