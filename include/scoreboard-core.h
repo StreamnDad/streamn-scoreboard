@@ -56,6 +56,7 @@ struct scoreboard_penalty {
 	int player_number;
 	int remaining_tenths;
 	bool active;
+	int phase2_tenths; /* 0 = no second phase (compound penalties) */
 };
 
 /* Lifecycle */
@@ -166,15 +167,22 @@ void scoreboard_decrement_away_fouls2(void);
 
 /* Penalties (up to SCOREBOARD_MAX_PENALTIES per team) */
 int scoreboard_home_penalty_add(int player_number, int duration_secs);
+int scoreboard_home_penalty_add_compound(int player_number, int phase1_secs,
+					 int phase2_secs);
 void scoreboard_home_penalty_clear(int slot);
+void scoreboard_home_penalty_set_time(int slot, int duration_secs);
 const struct scoreboard_penalty *scoreboard_get_home_penalty(int slot);
 int scoreboard_get_home_penalty_count(void);
 int scoreboard_away_penalty_add(int player_number, int duration_secs);
+int scoreboard_away_penalty_add_compound(int player_number, int phase1_secs,
+					 int phase2_secs);
 void scoreboard_away_penalty_clear(int slot);
+void scoreboard_away_penalty_set_time(int slot, int duration_secs);
 const struct scoreboard_penalty *scoreboard_get_away_penalty(int slot);
 int scoreboard_get_away_penalty_count(void);
 void scoreboard_penalty_tick(int elapsed_tenths);
 void scoreboard_penalty_adjust(int delta_tenths);
+void scoreboard_penalty_compact(void);
 void scoreboard_format_penalty_number(int slot, bool home, char *buf,
 				      size_t size);
 void scoreboard_format_penalty_time(int slot, bool home, char *buf,

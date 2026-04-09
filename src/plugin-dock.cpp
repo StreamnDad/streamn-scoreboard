@@ -82,6 +82,7 @@ struct process_job {
 struct penalty_row_widgets {
 	QWidget *container = nullptr;
 	QLabel *label = nullptr;
+	QPushButton *edit_btn = nullptr;
 	QPushButton *clear_btn = nullptr;
 	int slot = -1;
 	bool home = true;
@@ -158,7 +159,7 @@ struct recording_chapter {
 };
 QVector<recording_chapter> g_recording_chapters;
 
-static const int kNumHotkeys = 37;
+static const int kNumHotkeys = 45;
 
 static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_clock_startstop",  "sb_clock_reset",
@@ -180,6 +181,10 @@ static const char *kHotkeyNames[kNumHotkeys] = {
 	"sb_home_major_pen_add", "sb_away_major_pen_add",
 	"sb_home_fo_plus",     "sb_home_fo_minus",
 	"sb_away_fo_plus",     "sb_away_fo_minus",
+	"sb_home_2plus2_pen_add", "sb_away_2plus2_pen_add",
+	"sb_home_2plus5_pen_add", "sb_away_2plus5_pen_add",
+	"sb_home_pen_edit1",   "sb_home_pen_edit2",
+	"sb_away_pen_edit1",   "sb_away_pen_edit2",
 };
 
 obs_hotkey_id g_hotkey_ids[kNumHotkeys];
@@ -835,6 +840,7 @@ void run_reeln_highlights_command()
 }
 
 void write_files_now();
+void open_edit_penalty_dialog(QWidget *parent, bool home, int slot);
 
 /* ---- UI update ---- */
 
@@ -984,6 +990,18 @@ void update_all_labels()
 					sizeof(tbuf));
 				QString text = QString::fromUtf8(nbuf)
 					+ " " + QString::fromUtf8(tbuf);
+				const struct scoreboard_penalty *pen =
+					pw->home
+					? scoreboard_get_home_penalty(pw->slot)
+					: scoreboard_get_away_penalty(pw->slot);
+				if (pen && pen->phase2_tenths > 0) {
+					int p2s = pen->phase2_tenths / 10;
+					char p2buf[16];
+					snprintf(p2buf, sizeof(p2buf),
+						 " (+%d:%02d)",
+						 p2s / 60, p2s % 60);
+					text += QString::fromUtf8(p2buf);
+				}
 				if (idx >= SCOREBOARD_MAX_RUNNING_PENALTIES)
 					text += " (queued)";
 				pw->label->setText(text);
@@ -1020,18 +1038,44 @@ void update_all_labels()
 
 			QString text = QString::fromUtf8(nbuf) + " " +
 				QString::fromUtf8(tbuf);
+			const struct scoreboard_penalty *pen =
+				home ? scoreboard_get_home_penalty(i)
+				     : scoreboard_get_away_penalty(i);
+			if (pen && pen->phase2_tenths > 0) {
+				int p2s = pen->phase2_tenths / 10;
+				char p2buf[16];
+				snprintf(p2buf, sizeof(p2buf),
+					 " (+%d:%02d)",
+					 p2s / 60, p2s % 60);
+				text += QString::fromUtf8(p2buf);
+			}
 			if (row_idx >= SCOREBOARD_MAX_RUNNING_PENALTIES)
 				text += " (queued)";
 			pw->label = new QLabel(text);
 			pw->label->setStyleSheet("font-size: 11px;");
 			row_idx++;
+
+			const char *btn_style =
+				"QPushButton { padding: 0px; min-height: 16px; max-height: 18px; font-size: 10px; }";
+
+			pw->edit_btn = new QPushButton("\u270F");
+			pw->edit_btn->setFixedSize(18, 18);
+			pw->edit_btn->setStyleSheet(btn_style);
+
 			pw->clear_btn = new QPushButton("X");
 			pw->clear_btn->setFixedSize(18, 18);
-			pw->clear_btn->setStyleSheet(
-				"QPushButton { padding: 0px; min-height: 16px; max-height: 18px; font-size: 10px; }");
+			pw->clear_btn->setStyleSheet(btn_style);
 
 			int captured_slot = i;
 			bool captured_home = home;
+			QObject::connect(
+				pw->edit_btn, &QPushButton::clicked,
+				[parent_widget, captured_slot,
+				 captured_home]() {
+					open_edit_penalty_dialog(
+						parent_widget, captured_home,
+						captured_slot);
+				});
 			QObject::connect(
 				pw->clear_btn, &QPushButton::clicked,
 				[captured_slot, captured_home]() {
@@ -1039,21 +1083,35 @@ void update_all_labels()
 						captured_home
 						? scoreboard_get_home_penalty(captured_slot)
 						: scoreboard_get_away_penalty(captured_slot);
-					if (p && p->active)
+					if (!p || !p->active)
+						return;
+					/* Compound phase 1: transition to
+					   phase 2. Otherwise: full clear. */
+					if (p->phase2_tenths > 0) {
+						if (captured_home)
+							scoreboard_home_penalty_set_time(
+								captured_slot, 0);
+						else
+							scoreboard_away_penalty_set_time(
+								captured_slot, 0);
+					} else {
 						remove_penalty_event(
 							captured_home,
 							p->player_number);
-					if (captured_home)
-						scoreboard_home_penalty_clear(
-							captured_slot);
-					else
-						scoreboard_away_penalty_clear(
-							captured_slot);
+						if (captured_home)
+							scoreboard_home_penalty_clear(
+								captured_slot);
+						else
+							scoreboard_away_penalty_clear(
+								captured_slot);
+						scoreboard_penalty_compact();
+					}
 					write_files_now();
 					update_all_labels();
 				});
 
 			hl->addWidget(pw->label, 1);
+			hl->addWidget(pw->edit_btn);
 			hl->addWidget(pw->clear_btn);
 			layout->addWidget(pw->container);
 			rows.push_back(pw);
@@ -1212,16 +1270,19 @@ void update_highlights_button_visibility()
 /* ---- Dialogs ---- */
 
 void open_add_penalty_dialog(QWidget *parent, bool home,
-			     int default_duration_secs = 0)
+			     int default_duration_secs = 0,
+			     int phase2_secs = 0)
 {
 	QDialog dialog(parent);
 	dialog.setWindowTitle(home ? "Add Home Penalty" : "Add Away Penalty");
+	dialog.raise();
+	dialog.activateWindow();
 	QVBoxLayout *layout = new QVBoxLayout(&dialog);
 
 	QHBoxLayout *num_row = new QHBoxLayout();
 	num_row->addWidget(new QLabel("Player #:", &dialog));
 	QLineEdit *num_input = new QLineEdit(&dialog);
-	num_input->setPlaceholderText("optional");
+	num_input->setPlaceholderText("required");
 	num_row->addWidget(num_input);
 	layout->addLayout(num_row);
 
@@ -1236,6 +1297,140 @@ void open_add_penalty_dialog(QWidget *parent, bool home,
 	dur_row->addWidget(dur_spin);
 	layout->addLayout(dur_row);
 
+	/* Phase 2 toggle buttons — only for sports with major penalties */
+	QPushButton *p2_btn_2 = nullptr;
+	QPushButton *p2_btn_5 = nullptr;
+	QPushButton *p2_btn_10 = nullptr;
+	const struct scoreboard_sport_preset *preset =
+		scoreboard_get_sport_preset();
+	bool show_compound =
+		preset && preset->has_penalties &&
+		preset->default_major_penalty_secs > 0;
+
+	if (show_compound) {
+		QHBoxLayout *p2_row = new QHBoxLayout();
+		p2_row->addWidget(new QLabel("Phase 2:", &dialog));
+		p2_btn_2 = new QPushButton("+2", &dialog);
+		p2_btn_5 = new QPushButton("+5", &dialog);
+		p2_btn_10 = new QPushButton("+10", &dialog);
+		p2_btn_2->setCheckable(true);
+		p2_btn_5->setCheckable(true);
+		p2_btn_10->setCheckable(true);
+
+		/* Pre-select based on phase2_secs parameter */
+		if (phase2_secs == scoreboard_get_default_penalty_duration())
+			p2_btn_2->setChecked(true);
+		else if (phase2_secs ==
+			 scoreboard_get_default_major_penalty_duration())
+			p2_btn_5->setChecked(true);
+		else if (phase2_secs == 600)
+			p2_btn_10->setChecked(true);
+
+		/* Exclusive + deselectable: clicking a checked button
+		   unchecks it; clicking another unchecks the rest */
+		auto toggle = [=](QPushButton *clicked) {
+			if (clicked->isChecked()) {
+				if (clicked != p2_btn_2)
+					p2_btn_2->setChecked(false);
+				if (clicked != p2_btn_5)
+					p2_btn_5->setChecked(false);
+				if (clicked != p2_btn_10)
+					p2_btn_10->setChecked(false);
+			}
+		};
+		QObject::connect(p2_btn_2, &QPushButton::clicked,
+				 [=]() { toggle(p2_btn_2); });
+		QObject::connect(p2_btn_5, &QPushButton::clicked,
+				 [=]() { toggle(p2_btn_5); });
+		QObject::connect(p2_btn_10, &QPushButton::clicked,
+				 [=]() { toggle(p2_btn_10); });
+
+		p2_row->addWidget(p2_btn_2);
+		p2_row->addWidget(p2_btn_5);
+		p2_row->addWidget(p2_btn_10);
+		layout->addLayout(p2_row);
+	}
+
+	QDialogButtonBox *buttons = new QDialogButtonBox(
+		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+			 &QDialog::accept);
+	QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+			 &QDialog::reject);
+	layout->addWidget(buttons);
+
+	num_input->setFocus();
+
+	if (dialog.exec() == QDialog::Accepted) {
+		bool ok = false;
+		int player_num = num_input->text().trimmed().toInt(&ok);
+		if (!ok)
+			player_num = 0;
+
+		/* Determine phase 2 from toggle state */
+		int selected_phase2 = 0;
+		if (p2_btn_2 && p2_btn_2->isChecked())
+			selected_phase2 =
+				scoreboard_get_default_penalty_duration();
+		else if (p2_btn_5 && p2_btn_5->isChecked())
+			selected_phase2 =
+				scoreboard_get_default_major_penalty_duration();
+		else if (p2_btn_10 && p2_btn_10->isChecked())
+			selected_phase2 = 600;
+
+		int slot;
+		if (selected_phase2 > 0) {
+			if (home)
+				slot = scoreboard_home_penalty_add_compound(
+					player_num, dur_spin->value(),
+					selected_phase2);
+			else
+				slot = scoreboard_away_penalty_add_compound(
+					player_num, dur_spin->value(),
+					selected_phase2);
+		} else {
+			if (home)
+				slot = scoreboard_home_penalty_add(
+					player_num, dur_spin->value());
+			else
+				slot = scoreboard_away_penalty_add(
+					player_num, dur_spin->value());
+		}
+		if (slot >= 0)
+			log_penalty_event(home, player_num);
+		else
+			log_info("[streamn-obs-scoreboard] penalty slots full");
+		update_all_labels();
+	}
+}
+
+void open_edit_penalty_dialog(QWidget *parent, bool home, int slot)
+{
+	const struct scoreboard_penalty *p =
+		home ? scoreboard_get_home_penalty(slot)
+		     : scoreboard_get_away_penalty(slot);
+	if (!p || !p->active)
+		return;
+
+	QDialog dialog(parent);
+	char title_buf[64];
+	snprintf(title_buf, sizeof(title_buf), "Edit %s Penalty #%d",
+		 home ? "Home" : "Away", p->player_number);
+	dialog.setWindowTitle(QString::fromUtf8(title_buf));
+	dialog.raise();
+	dialog.activateWindow();
+	QVBoxLayout *layout = new QVBoxLayout(&dialog);
+
+	int current_secs = p->remaining_tenths / 10;
+
+	QHBoxLayout *dur_row = new QHBoxLayout();
+	dur_row->addWidget(new QLabel("Remaining (sec):", &dialog));
+	QSpinBox *dur_spin = new QSpinBox(&dialog);
+	dur_spin->setRange(0, 1200);
+	dur_spin->setValue(current_secs);
+	dur_row->addWidget(dur_spin);
+	layout->addLayout(dur_row);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1245,21 +1440,13 @@ void open_add_penalty_dialog(QWidget *parent, bool home,
 	layout->addWidget(buttons);
 
 	if (dialog.exec() == QDialog::Accepted) {
-		bool ok = false;
-		int player_num = num_input->text().trimmed().toInt(&ok);
-		if (!ok)
-			player_num = 0;
-		int slot;
 		if (home)
-			slot = scoreboard_home_penalty_add(player_num,
-							   dur_spin->value());
+			scoreboard_home_penalty_set_time(slot,
+							 dur_spin->value());
 		else
-			slot = scoreboard_away_penalty_add(player_num,
-							   dur_spin->value());
-		if (slot >= 0)
-			log_penalty_event(home, player_num);
-		else
-			log_info("[streamn-obs-scoreboard] penalty slots full");
+			scoreboard_away_penalty_set_time(slot,
+							 dur_spin->value());
+		write_files_now();
 		update_all_labels();
 	}
 }
@@ -1788,12 +1975,12 @@ void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
+	if (!pressed || !g_dock_widget)
 		return;
-	int slot = scoreboard_home_penalty_add(
-		0, scoreboard_get_default_penalty_duration());
-	if (slot >= 0)
-		log_penalty_event(true, 0);
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_add_penalty_dialog(g_dock_widget, true); },
+		Qt::QueuedConnection);
 }
 
 void hk_home_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1801,9 +1988,15 @@ void hk_home_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed)
 		return;
 	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
-	if (p && p->active)
+	if (!p || !p->active)
+		return;
+	if (p->phase2_tenths > 0) {
+		scoreboard_home_penalty_set_time(0, 0);
+	} else {
 		remove_penalty_event(true, p->player_number);
-	scoreboard_home_penalty_clear(0);
+		scoreboard_home_penalty_clear(0);
+		scoreboard_penalty_compact();
+	}
 }
 
 void hk_home_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1811,19 +2004,25 @@ void hk_home_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed)
 		return;
 	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(1);
-	if (p && p->active)
+	if (!p || !p->active)
+		return;
+	if (p->phase2_tenths > 0) {
+		scoreboard_home_penalty_set_time(1, 0);
+	} else {
 		remove_penalty_event(true, p->player_number);
-	scoreboard_home_penalty_clear(1);
+		scoreboard_home_penalty_clear(1);
+		scoreboard_penalty_compact();
+	}
 }
 
 void hk_away_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
+	if (!pressed || !g_dock_widget)
 		return;
-	int slot = scoreboard_away_penalty_add(
-		0, scoreboard_get_default_penalty_duration());
-	if (slot >= 0)
-		log_penalty_event(false, 0);
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_add_penalty_dialog(g_dock_widget, false); },
+		Qt::QueuedConnection);
 }
 
 void hk_away_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1831,9 +2030,15 @@ void hk_away_pen_clear1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed)
 		return;
 	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
-	if (p && p->active)
+	if (!p || !p->active)
+		return;
+	if (p->phase2_tenths > 0) {
+		scoreboard_away_penalty_set_time(0, 0);
+	} else {
 		remove_penalty_event(false, p->player_number);
-	scoreboard_away_penalty_clear(0);
+		scoreboard_away_penalty_clear(0);
+		scoreboard_penalty_compact();
+	}
 }
 
 void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -1841,29 +2046,145 @@ void hk_away_pen_clear2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 	if (!pressed)
 		return;
 	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(1);
-	if (p && p->active)
+	if (!p || !p->active)
+		return;
+	if (p->phase2_tenths > 0) {
+		scoreboard_away_penalty_set_time(1, 0);
+	} else {
 		remove_penalty_event(false, p->player_number);
-	scoreboard_away_penalty_clear(1);
+		scoreboard_away_penalty_clear(1);
+		scoreboard_penalty_compact();
+	}
 }
 
 void hk_home_major_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
+	if (!pressed || !g_dock_widget)
 		return;
-	int slot = scoreboard_home_penalty_add(
-		0, scoreboard_get_default_major_penalty_duration());
-	if (slot >= 0)
-		log_penalty_event(true, 0);
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(
+				g_dock_widget, true,
+				scoreboard_get_default_major_penalty_duration());
+		},
+		Qt::QueuedConnection);
 }
 
 void hk_away_major_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (!pressed)
+	if (!pressed || !g_dock_widget)
 		return;
-	int slot = scoreboard_away_penalty_add(
-		0, scoreboard_get_default_major_penalty_duration());
-	if (slot >= 0)
-		log_penalty_event(false, 0);
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(
+				g_dock_widget, false,
+				scoreboard_get_default_major_penalty_duration());
+		},
+		Qt::QueuedConnection);
+}
+
+void hk_home_2plus2_pen_add(void *, obs_hotkey_id, obs_hotkey_t *,
+			     bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	int minor = scoreboard_get_default_penalty_duration();
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(g_dock_widget, true, minor,
+						minor);
+		},
+		Qt::QueuedConnection);
+}
+
+void hk_away_2plus2_pen_add(void *, obs_hotkey_id, obs_hotkey_t *,
+			     bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	int minor = scoreboard_get_default_penalty_duration();
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(g_dock_widget, false, minor,
+						minor);
+		},
+		Qt::QueuedConnection);
+}
+
+void hk_home_2plus5_pen_add(void *, obs_hotkey_id, obs_hotkey_t *,
+			     bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	int minor = scoreboard_get_default_penalty_duration();
+	int major = scoreboard_get_default_major_penalty_duration();
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(g_dock_widget, true, minor,
+						major);
+		},
+		Qt::QueuedConnection);
+}
+
+void hk_away_2plus5_pen_add(void *, obs_hotkey_id, obs_hotkey_t *,
+			     bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	int minor = scoreboard_get_default_penalty_duration();
+	int major = scoreboard_get_default_major_penalty_duration();
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() {
+			open_add_penalty_dialog(g_dock_widget, false, minor,
+						major);
+		},
+		Qt::QueuedConnection);
+}
+
+void hk_home_pen_edit1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_edit_penalty_dialog(g_dock_widget, true, 0); },
+		Qt::QueuedConnection);
+}
+
+void hk_home_pen_edit2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_edit_penalty_dialog(g_dock_widget, true, 1); },
+		Qt::QueuedConnection);
+}
+
+void hk_away_pen_edit1(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_edit_penalty_dialog(g_dock_widget, false, 0); },
+		Qt::QueuedConnection);
+}
+
+void hk_away_pen_edit2(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
+{
+	if (!pressed || !g_dock_widget)
+		return;
+	QMetaObject::invokeMethod(
+		g_dock_widget,
+		[=]() { open_edit_penalty_dialog(g_dock_widget, false, 1); },
+		Qt::QueuedConnection);
 }
 
 void hk_generate_highlights(void *, obs_hotkey_id, obs_hotkey_t *,
@@ -2089,6 +2410,38 @@ void register_hotkeys()
 	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
 		"sb_away_fo_minus", "Streamn: Away Faceoff -",
 		hk_away_fo_minus, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_2plus2_pen_add",
+		"Streamn: Home 2+2 Penalty Add",
+		hk_home_2plus2_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_2plus2_pen_add",
+		"Streamn: Away 2+2 Penalty Add",
+		hk_away_2plus2_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_2plus5_pen_add",
+		"Streamn: Home 2+5 Penalty Add",
+		hk_home_2plus5_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_2plus5_pen_add",
+		"Streamn: Away 2+5 Penalty Add",
+		hk_away_2plus5_pen_add, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_pen_edit1",
+		"Streamn: Home Penalty Edit 1",
+		hk_home_pen_edit1, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_home_pen_edit2",
+		"Streamn: Home Penalty Edit 2",
+		hk_home_pen_edit2, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_pen_edit1",
+		"Streamn: Away Penalty Edit 1",
+		hk_away_pen_edit1, nullptr);
+	g_hotkey_ids[idx++] = obs_hotkey_register_frontend(
+		"sb_away_pen_edit2",
+		"Streamn: Away Penalty Edit 2",
+		hk_away_pen_edit2, nullptr);
 
 	/* Register save/load callbacks to persist hotkey bindings */
 	obs_frontend_add_save_callback(save_hotkeys, nullptr);

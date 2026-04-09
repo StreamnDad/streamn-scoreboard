@@ -4,6 +4,31 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-08
+
+### Added
+- Compound penalty support (2+2, 2+5, 2+10) — two-phase penalties where phase 2 auto-starts when phase 1 expires, matching hockey rules for double-minor and major infractions
+- Phase 2 toggle buttons (+2, +5, +10) in the add-penalty dialog — select one for compound, deselect all for regular; only shown for sports with major penalties (hockey, lacrosse, rugby)
+- Compound indicator `(+M:SS)` shown in the dock UI for penalties still in phase 1
+- Edit button (✏) on each active penalty row — click to change remaining time
+- 4 new OBS hotkeys: Home/Away Penalty Edit 1/2 — opens edit dialog for the first or second running penalty
+- 4 new OBS hotkeys: Home/Away 2+2 Penalty Add, Home/Away 2+5 Penalty Add — open add-penalty dialog with compound phase pre-selected
+- `scoreboard_penalty_compact()` API — consolidates penalties to lowest slots after any clear or expiry
+- `scoreboard_home_penalty_set_time()` / `scoreboard_away_penalty_set_time()` API for programmatic time edits
+- JSON state persistence for `phase2_tenths` field (backwards compatible — old state files load with phase2 defaulting to 0)
+
+### Fixed
+- Clock adjust at 0:00 no longer reduces penalty time — pressing -1 min or -1 sec when the period clock is already at 0:00 was incorrectly subtracting time from active penalties
+- File watcher re-read no longer wipes compound penalty phase 2 data — `parse_penalty_files` now preserves `phase2_tenths` across text file round-trips
+
+### Changed
+- Penalty hotkeys now open a dialog for player number entry instead of silently adding penalties with no player number — ensures every penalty is tracked to a player
+- Clearing a compound penalty in phase 1 (via X button or Clear hotkey) transitions to phase 2 instead of removing the penalty entirely; clearing in phase 2 removes it as normal
+- Editing a compound penalty's time to 0 transitions to phase 2 instead of clearing
+- After clearing or expiring a penalty, remaining penalties consolidate to the lowest slots — "Clear 1" always targets the first remaining penalty regardless of which slot originally held it
+- Hotkey penalty-add callbacks now dispatch to the Qt main thread via `QMetaObject::invokeMethod` for thread-safe dialog display
+- Total OBS hotkeys increased from 37 to 45
+
 ## [0.5.1] - 2026-03-27
 
 ### Fixed

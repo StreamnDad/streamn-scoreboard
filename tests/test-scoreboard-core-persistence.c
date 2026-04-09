@@ -1206,6 +1206,86 @@ static void test_period_beyond_labels_format(void)
 	remove(tmpfile);
 }
 
+static void test_read_all_files_preserves_compound(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+
+	/* Add a compound penalty and a regular one */
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+	scoreboard_home_penalty_add(7, 60);
+
+	/* Write text files (which don't carry phase2 info) */
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	/* Re-read from files — should preserve phase2_tenths */
+	ok = scoreboard_read_all_files();
+	assert(ok);
+
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->player_number == 12);
+	assert(p->phase2_tenths == 1200);
+
+	const struct scoreboard_penalty *p1 = scoreboard_get_home_penalty(1);
+	assert(p1->active);
+	assert(p1->player_number == 7);
+	assert(p1->phase2_tenths == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_save_load_compound_penalty(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_home_penalty_add_compound(12, 120, 120);
+	scoreboard_away_penalty_add_compound(22, 120, 300);
+
+	char save_path[512];
+	snprintf(save_path, sizeof(save_path), "%s/state.json", g_tmp_dir);
+
+	assert(scoreboard_save_state(save_path));
+
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(save_path));
+
+	const struct scoreboard_penalty *hp = scoreboard_get_home_penalty(0);
+	assert(hp->active);
+	assert(hp->player_number == 12);
+	assert(hp->remaining_tenths == 1200);
+	assert(hp->phase2_tenths == 1200);
+
+	const struct scoreboard_penalty *ap = scoreboard_get_away_penalty(0);
+	assert(ap->active);
+	assert(ap->player_number == 22);
+	assert(ap->remaining_tenths == 1200);
+	assert(ap->phase2_tenths == 3000);
+
+	cleanup_tmp_dir();
+}
+
+static void test_load_old_json_no_phase2(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	/* Save state with a regular penalty (phase2_tenths will be 0) */
+	scoreboard_home_penalty_add(12, 120);
+	char save_path[512];
+	snprintf(save_path, sizeof(save_path), "%s/state.json", g_tmp_dir);
+	assert(scoreboard_save_state(save_path));
+
+	/* Reload — phase2_tenths defaults to 0 */
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(save_path));
+	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
+
+	cleanup_tmp_dir();
+}
+
 int main(void)
 {
 	test_write_all_files();
@@ -1257,6 +1337,9 @@ int main(void)
 	test_period_labels_save_load_zero_labels();
 	test_period_labels_load_exceeds_max();
 	test_period_beyond_labels_format();
+	test_read_all_files_preserves_compound();
+	test_save_load_compound_penalty();
+	test_load_old_json_no_phase2();
 
 	printf("All scoreboard-core persistence tests passed.\n");
 	return 0;
