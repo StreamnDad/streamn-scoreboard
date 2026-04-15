@@ -1475,6 +1475,9 @@ bool scoreboard_write_all_files(void)
 		     ok;
 	}
 
+	snprintf(buf, sizeof(buf), "%d", g_state.period_length);
+	ok = write_text_file(dir, "period_length.txt", buf) && ok;
+
 	g_dirty = false;
 	return ok;
 }
@@ -1593,6 +1596,13 @@ bool scoreboard_read_all_files(void)
 	/* Period labels file is optional — overrides sport defaults */
 	if (read_text_file(dir, "period_labels.txt", buf, sizeof(buf)))
 		scoreboard_set_period_labels(buf);
+
+	/* Period length file is optional — overrides sport-set period_length */
+	if (read_text_file(dir, "period_length.txt", buf, sizeof(buf))) {
+		int val = atoi(buf);
+		if (val > 0)
+			g_state.period_length = val;
+	}
 
 	g_dirty = false;
 	return ok;

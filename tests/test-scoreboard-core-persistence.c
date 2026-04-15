@@ -815,6 +815,65 @@ static void test_read_all_files_large_file(void)
 	cleanup_tmp_dir();
 }
 
+static void test_read_all_files_period_length(void)
+{
+	/* period_length.txt overrides the sport-set period_length */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+
+	/* Default hockey period_length is 900 (15 min) */
+	assert(scoreboard_get_period_length() == 900);
+
+	write_file(g_tmp_dir, "clock.txt", "12:00");
+	write_file(g_tmp_dir, "period.txt", "1");
+	write_file(g_tmp_dir, "home_name.txt", "A");
+	write_file(g_tmp_dir, "away_name.txt", "B");
+	write_file(g_tmp_dir, "home_score.txt", "0");
+	write_file(g_tmp_dir, "away_score.txt", "0");
+	write_file(g_tmp_dir, "home_shots.txt", "0");
+	write_file(g_tmp_dir, "away_shots.txt", "0");
+	write_file(g_tmp_dir, "home_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "home_penalty_times.txt", "");
+	write_file(g_tmp_dir, "away_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "away_penalty_times.txt", "");
+	write_file(g_tmp_dir, "period_length.txt", "720");
+
+	bool ok = scoreboard_read_all_files();
+	assert(ok);
+	assert(scoreboard_clock_get_tenths() == 7200); /* 12:00 */
+	assert(scoreboard_get_period_length() == 720); /* 12 min */
+
+	cleanup_tmp_dir();
+}
+
+static void test_read_all_files_period_length_missing(void)
+{
+	/* Missing period_length.txt leaves period_length at sport default */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+
+	write_file(g_tmp_dir, "clock.txt", "15:00");
+	write_file(g_tmp_dir, "period.txt", "1");
+	write_file(g_tmp_dir, "home_name.txt", "A");
+	write_file(g_tmp_dir, "away_name.txt", "B");
+	write_file(g_tmp_dir, "home_score.txt", "0");
+	write_file(g_tmp_dir, "away_score.txt", "0");
+	write_file(g_tmp_dir, "home_shots.txt", "0");
+	write_file(g_tmp_dir, "away_shots.txt", "0");
+	write_file(g_tmp_dir, "home_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "home_penalty_times.txt", "");
+	write_file(g_tmp_dir, "away_penalty_numbers.txt", "");
+	write_file(g_tmp_dir, "away_penalty_times.txt", "");
+
+	bool ok = scoreboard_read_all_files();
+	assert(ok);
+	assert(scoreboard_get_period_length() == 900); /* unchanged */
+
+	cleanup_tmp_dir();
+}
+
 static void test_write_read_round_trip(void)
 {
 	/* Write game state via write_all_files, then read it back via
@@ -835,6 +894,7 @@ static void test_write_read_round_trip(void)
 	scoreboard_away_penalty_add(22, 60);
 	scoreboard_set_default_penalty_duration(90);
 	scoreboard_set_default_major_penalty_duration(450);
+	scoreboard_set_period_length(1200);
 
 	bool ok = scoreboard_write_all_files();
 	assert(ok);
@@ -864,6 +924,7 @@ static void test_write_read_round_trip(void)
 	assert(scoreboard_get_away_penalty(0)->player_number == 22);
 	assert(scoreboard_get_default_penalty_duration() == 90);
 	assert(scoreboard_get_default_major_penalty_duration() == 450);
+	assert(scoreboard_get_period_length() == 1200);
 
 	cleanup_tmp_dir();
 }
@@ -1322,6 +1383,8 @@ int main(void)
 	test_read_all_files_ot2_ot4();
 	test_read_all_files_long_penalty_lines();
 	test_read_all_files_large_file();
+	test_read_all_files_period_length();
+	test_read_all_files_period_length_missing();
 	test_write_read_round_trip();
 	test_reset_state_wipes_output_directory();
 	test_startup_sequence_simulation();

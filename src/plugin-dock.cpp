@@ -1138,6 +1138,7 @@ const char *kWatchedFiles[] = {
 	"default_penalty_duration.txt",
 	"default_major_penalty_duration.txt",
 	"period_labels.txt",
+	"period_length.txt",
 };
 const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
 const qint64 kWriteCooldownMs = 500;
@@ -3322,6 +3323,8 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		scoreboard_new_game();
 		g_period_start_logged = -1;
 		scoreboard_event_log_clear();
+		if (g_game_finished)
+			g_game_finished->setChecked(false);
 		write_timestamps_file();
 		update_copy_timestamps_visibility();
 		update_all_labels();

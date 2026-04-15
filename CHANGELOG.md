@@ -4,6 +4,15 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-14
+
+### Added
+- `period_length.txt` file written and read by the scoreboard core — enables external tools (reeln-cli) to set a custom period length that persists across "New Game" and period advance
+- `period_length.txt` added to the file watcher for automatic pickup of external changes
+
+### Fixed
+- "Game Finished" checkbox now resets when starting a new game — previously carried over from the prior game, causing the highlights button to show "Generate Game Highlights" instead of "Generate Period Highlights"
+
 ## [0.6.0] - 2026-04-08
 
 ### Added
