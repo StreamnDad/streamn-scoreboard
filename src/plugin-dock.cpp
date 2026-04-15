@@ -726,14 +726,14 @@ void log_penalty_event(bool home, int player_number)
 {
 	char buf[SCOREBOARD_EVENT_LABEL_SIZE];
 	if (player_number > 0)
-		snprintf(buf, sizeof(buf), "Power Play: %s #%d",
-			 home ? scoreboard_get_away_name()
-			      : scoreboard_get_home_name(),
+		snprintf(buf, sizeof(buf), "Penalty: %s #%d",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name(),
 			 player_number);
 	else
-		snprintf(buf, sizeof(buf), "Power Play: %s",
-			 home ? scoreboard_get_away_name()
-			      : scoreboard_get_home_name());
+		snprintf(buf, sizeof(buf), "Penalty: %s",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name());
 	log_event(buf);
 	add_recording_chapter(buf);
 }
@@ -742,14 +742,14 @@ void remove_penalty_event(bool home, int player_number)
 {
 	char prefix[SCOREBOARD_EVENT_LABEL_SIZE];
 	if (player_number > 0)
-		snprintf(prefix, sizeof(prefix), "Power Play: %s #%d",
-			 home ? scoreboard_get_away_name()
-			      : scoreboard_get_home_name(),
+		snprintf(prefix, sizeof(prefix), "Penalty: %s #%d",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name(),
 			 player_number);
 	else
-		snprintf(prefix, sizeof(prefix), "Power Play: %s",
-			 home ? scoreboard_get_away_name()
-			      : scoreboard_get_home_name());
+		snprintf(prefix, sizeof(prefix), "Penalty: %s",
+			 home ? scoreboard_get_home_name()
+			      : scoreboard_get_away_name());
 	remove_last_event(prefix);
 }
 

@@ -12,6 +12,7 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ### Fixed
 - "Game Finished" checkbox now resets when starting a new game — previously carried over from the prior game, causing the highlights button to show "Generate Game Highlights" instead of "Generate Period Highlights"
+- Penalty chapter markers now correctly name the penalized team instead of the opposing team, and use the label "Penalty:" instead of "Power Play:" (#13)
 
 ## [0.6.0] - 2026-04-08
 

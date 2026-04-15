@@ -648,9 +648,9 @@ static void test_event_log_find_and_remove(void)
 	scoreboard_reset_state_for_tests();
 
 	scoreboard_event_log_add(0, "Stream Start");
-	scoreboard_event_log_add(100, "Power Play: Eagles #12");
+	scoreboard_event_log_add(100, "Penalty: Eagles #12");
 	scoreboard_event_log_add(200, "Goal: Eagles (1-0)");
-	scoreboard_event_log_add(300, "Power Play: Hawks #7");
+	scoreboard_event_log_add(300, "Penalty: Hawks #7");
 	scoreboard_event_log_add(400, "Goal: Eagles (2-0)");
 
 	/* Remove the last Eagles goal — simulates goal called off */
@@ -663,8 +663,8 @@ static void test_event_log_find_and_remove(void)
 	idx = scoreboard_event_log_find_last("Goal: Eagles");
 	assert(idx == 2);
 
-	/* Remove the Eagles power play — simulates penalty called off */
-	idx = scoreboard_event_log_find_last("Power Play: Eagles");
+	/* Remove the Eagles penalty — simulates penalty called off */
+	idx = scoreboard_event_log_find_last("Penalty: Eagles");
 	assert(idx == 1);
 	scoreboard_event_log_remove(idx);
 	assert(scoreboard_event_log_count() == 3);
@@ -674,7 +674,7 @@ static void test_event_log_find_and_remove(void)
 	assert(strcmp(scoreboard_event_log_get(1)->label,
 		     "Goal: Eagles (1-0)") == 0);
 	assert(strcmp(scoreboard_event_log_get(2)->label,
-		     "Power Play: Hawks #7") == 0);
+		     "Penalty: Hawks #7") == 0);
 }
 
 int main(void)

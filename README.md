@@ -172,7 +172,7 @@ When OBS is streaming, events are logged with stream-relative timestamps. Click 
 0:00:00 Stream Start
 0:12:34 Period 1 Start
 0:15:22 Goal: Eagles (1-0)
-0:23:45 Power Play: Hawks #12
+0:23:45 Penalty: Hawks #12
 0:35:10 Period 1 End
 ```
 
