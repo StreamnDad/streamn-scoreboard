@@ -64,6 +64,7 @@ const char *kEnvFileKey = "environment_file";
 const char *kRecordChaptersKey = "record_chapters";
 const char *kGameClockEnabledKey = "game_clock_enabled";
 const char *kGameClockFormatKey = "game_clock_format";
+const char *kPenaltyLabelFormatKey = "penalty_label_format";
 
 struct process_job {
 	int id = 0;
@@ -1165,6 +1166,8 @@ const char *kWatchedFiles[] = {
 	"period_labels.txt",
 	"period_length.txt",
 	"cumulative_clock.txt",
+	"home_penalty_labels.txt",
+	"away_penalty_labels.txt",
 };
 const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
 const qint64 kWriteCooldownMs = 500;
@@ -1263,6 +1266,11 @@ void load_profile_paths()
 			(enum scoreboard_game_clock_format)config_get_int(
 				profile_cfg, kConfigSection,
 				kGameClockFormatKey));
+		const char *pen_fmt = config_get_string(
+			profile_cfg, kConfigSection,
+			kPenaltyLabelFormatKey);
+		if (pen_fmt != nullptr && pen_fmt[0] != '\0')
+			scoreboard_set_penalty_label_format(pen_fmt);
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -1291,6 +1299,9 @@ void save_profile_paths()
 			scoreboard_get_game_clock_enabled());
 	config_set_int(profile_cfg, kConfigSection, kGameClockFormatKey,
 		       (int)scoreboard_get_game_clock_display_format());
+	config_set_string(profile_cfg, kConfigSection,
+			  kPenaltyLabelFormatKey,
+			  scoreboard_get_penalty_label_format());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1609,6 +1620,22 @@ void open_clock_settings_dialog(QWidget *parent)
 	major_pen_dur_row->addWidget(major_pen_dur_spin);
 	layout->addLayout(major_pen_dur_row);
 
+	QHBoxLayout *pen_label_row = new QHBoxLayout();
+	QLabel *pen_label_label = new QLabel("Penalty label:", &dialog);
+	pen_label_row->addWidget(pen_label_label);
+	QLineEdit *pen_label_input = new QLineEdit(&dialog);
+	pen_label_input->setText(QString::fromUtf8(
+		scoreboard_get_penalty_label_format()));
+	pen_label_input->setPlaceholderText("#{{ number }}  {{ time }}");
+	pen_label_input->setToolTip(
+		"Format for combined penalty label files "
+		"(home_penalty_labels.txt, away_penalty_labels.txt).\n\n"
+		"Variables:\n"
+		"  {{ number }} \xe2\x80\x94 player number\n"
+		"  {{ time }} \xe2\x80\x94 time remaining (M:SS)");
+	pen_label_row->addWidget(pen_label_input, 1);
+	layout->addLayout(pen_label_row);
+
 	/* Preset duration/direction/features per sport (mirrors core table) */
 	struct sport_ui_info {
 		int duration_min;
@@ -1629,9 +1656,9 @@ void open_clock_settings_dialog(QWidget *parent)
 	/* Update dialog fields when sport changes */
 	QObject::connect(
 		sport_combo, qOverload<int>(&QComboBox::currentIndexChanged),
-		[len_spin, down_btn, up_btn, pen_dur_spin,
-		 pen_dur_label, major_pen_dur_spin,
-		 major_pen_dur_label](int index) {
+		[len_spin, down_btn, up_btn, pen_dur_spin, pen_dur_label,
+		 major_pen_dur_spin, major_pen_dur_label, pen_label_label,
+		 pen_label_input](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1648,6 +1675,8 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->setVisible(info.has_penalties);
 			major_pen_dur_label->setVisible(info.has_penalties);
 			major_pen_dur_spin->setVisible(info.has_penalties);
+			pen_label_label->setVisible(info.has_penalties);
+			pen_label_input->setVisible(info.has_penalties);
 		});
 
 	/* Period labels button */
@@ -1814,6 +1843,8 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->value());
 		scoreboard_set_default_major_penalty_duration(
 			major_pen_dur_spin->value());
+		scoreboard_set_penalty_label_format(
+			pen_label_input->text().toUtf8().constData());
 		scoreboard_set_cli_executable(
 			cli_input->text().trimmed().toUtf8().constData());
 		scoreboard_set_cli_extra_args(

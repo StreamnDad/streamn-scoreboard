@@ -9,6 +9,7 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 ### Added
 - Cumulative game clock — opt-in feature (Game Settings toggle) that counts up from 0:00 across the entire game, displayed under the period clock, written to `cumulative_clock.txt`, and used for event log timestamps when enabled (#12)
 - Cumulative clock format setting — choose between `MM:SS` (e.g. 75:30) and `H:MM:SS` (e.g. 1:15:30) in Game Settings
+- Combined penalty label files (`home_penalty_labels.txt`, `away_penalty_labels.txt`) with configurable format template — default `#{{ number }}  {{ time }}`, customizable in Game Settings (#14)
 - `period_length.txt` file written and read by the scoreboard core — enables external tools (reeln-cli) to set a custom period length that persists across "New Game" and period advance
 - `period_length.txt` added to the file watcher for automatic pickup of external changes
 

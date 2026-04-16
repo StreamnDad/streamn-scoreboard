@@ -1422,6 +1422,74 @@ static void test_game_clock_save_load_state(void)
 	cleanup_tmp_dir();
 }
 
+static void test_penalty_labels_write_files(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_home_penalty_add(88, 120);
+	scoreboard_away_penalty_add(12, 300);
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_penalty_labels.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "#88  2:00") == 0);
+	free(content);
+
+	snprintf(path, sizeof(path), "%s/away_penalty_labels.txt", g_tmp_dir);
+	content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "#12  5:00") == 0);
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_penalty_labels_write_empty(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_mark_dirty();
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_penalty_labels.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(content[0] == '\0');
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_penalty_label_format_save_load(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_penalty_label_format("{{ number }} | {{ time }}");
+
+	char save_path[512];
+	snprintf(save_path, sizeof(save_path), "%s/state.json", g_tmp_dir);
+	assert(scoreboard_save_state(save_path));
+
+	scoreboard_reset_state_for_tests();
+	assert(strcmp(scoreboard_get_penalty_label_format(),
+		     "#{{ number }}  {{ time }}") == 0);
+
+	assert(scoreboard_load_state(save_path));
+	assert(strcmp(scoreboard_get_penalty_label_format(),
+		     "{{ number }} | {{ time }}") == 0);
+
+	cleanup_tmp_dir();
+}
+
 int main(void)
 {
 	test_write_all_files();
@@ -1482,6 +1550,10 @@ int main(void)
 	test_game_clock_write_file();
 	test_game_clock_no_file_when_disabled();
 	test_game_clock_save_load_state();
+
+	test_penalty_labels_write_files();
+	test_penalty_labels_write_empty();
+	test_penalty_label_format_save_load();
 
 	printf("All scoreboard-core persistence tests passed.\n");
 	return 0;

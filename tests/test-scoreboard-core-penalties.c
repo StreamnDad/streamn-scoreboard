@@ -982,6 +982,161 @@ static void test_regular_penalty_has_zero_phase2(void)
 	assert(scoreboard_get_home_penalty(0)->phase2_tenths == 0);
 }
 
+/* ---- penalty label format ---- */
+
+static void test_penalty_label_format_default(void)
+{
+	scoreboard_reset_state_for_tests();
+	const char *fmt = scoreboard_get_penalty_label_format();
+	assert(strcmp(fmt, "#{{ number }}  {{ time }}") == 0);
+}
+
+static void test_penalty_label_format_set_get(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format("{{ number }} - {{ time }}");
+	assert(strcmp(scoreboard_get_penalty_label_format(),
+		     "{{ number }} - {{ time }}") == 0);
+}
+
+static void test_format_penalty_labels_no_penalties(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(buf[0] == '\0');
+}
+
+static void test_format_penalty_labels_one_penalty(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
+static void test_format_penalty_labels_two_penalties(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	scoreboard_home_penalty_add(12, 270);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00\n#12  4:30") == 0);
+}
+
+static void test_format_penalty_labels_no_player_number(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(0, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* number is empty, so format produces "#  2:00" */
+	assert(strcmp(buf, "#  2:00") == 0);
+}
+
+static void test_format_penalty_labels_custom_format(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format("{{ number }} - {{ time }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "88 - 2:00") == 0);
+}
+
+static void test_format_penalty_labels_null_buf(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Should not crash */
+	scoreboard_format_penalty_labels(true, NULL, 0);
+	char buf[4];
+	scoreboard_format_penalty_labels(true, buf, 0);
+}
+
+static void test_format_penalty_labels_away(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add(55, 300);
+	char buf[256];
+	scoreboard_format_penalty_labels(false, buf, sizeof(buf));
+	assert(strcmp(buf, "#55  5:00") == 0);
+}
+
+static void test_penalty_label_format_null(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(NULL);
+	/* Getter should return the default when internal is empty */
+	const char *fmt = scoreboard_get_penalty_label_format();
+	assert(strcmp(fmt, "#{{ number }}  {{ time }}") == 0);
+}
+
+static void test_format_penalty_labels_unterminated(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Truly unterminated {{ — no }} anywhere after it */
+	scoreboard_set_penalty_label_format("P{{ number }}={{ time");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* "P" + "88" + "=" + "{{ time" literal */
+	assert(strcmp(buf, "P88={{ time") == 0);
+}
+
+static void test_format_penalty_labels_small_buf(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	/* Buffer too small for expansion — truncates */
+	char buf[6];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strlen(buf) <= 5);
+}
+
+static void test_format_penalty_labels_overflow_lines(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(88, 120);
+	scoreboard_home_penalty_add(12, 300);
+	/* Buffer big enough for first line but not second */
+	char buf[12];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Only first penalty fits */
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
+static void test_format_penalty_labels_long_format(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* Fill format to near max with literal text + variable */
+	scoreboard_set_penalty_label_format(
+		"AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC "
+		"DDDDDDDDDD EEEEEEEEEE {{ number }} {{ time }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[512];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Verify expansion works with long format */
+	assert(strstr(buf, "88") != NULL);
+	assert(strstr(buf, "2:00") != NULL);
+}
+
+static void test_format_penalty_labels_many_penalties(void)
+{
+	/* Fill all penalty slots to exercise the SCOREBOARD_MAX_RUNNING_PENALTIES
+	   limit inside format_penalty_labels — the third penalty should be
+	   excluded even if the buffer is large enough. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add(10, 120);
+	scoreboard_home_penalty_add(20, 120);
+	scoreboard_home_penalty_add(30, 120);
+	char buf[512];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Only 2 running penalties shown */
+	assert(strcmp(buf, "#10  2:00\n#20  2:00") == 0);
+}
+
 int main(void)
 {
 	test_home_penalty_add();
@@ -1076,6 +1231,23 @@ int main(void)
 	test_set_time_zero_compound_away_transitions();
 	test_set_time_zero_regular_still_clears();
 	test_regular_penalty_has_zero_phase2();
+
+	/* Penalty label format tests */
+	test_penalty_label_format_default();
+	test_penalty_label_format_set_get();
+	test_format_penalty_labels_no_penalties();
+	test_format_penalty_labels_one_penalty();
+	test_format_penalty_labels_two_penalties();
+	test_format_penalty_labels_no_player_number();
+	test_format_penalty_labels_custom_format();
+	test_format_penalty_labels_null_buf();
+	test_format_penalty_labels_away();
+	test_penalty_label_format_null();
+	test_format_penalty_labels_unterminated();
+	test_format_penalty_labels_small_buf();
+	test_format_penalty_labels_overflow_lines();
+	test_format_penalty_labels_long_format();
+	test_format_penalty_labels_many_penalties();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

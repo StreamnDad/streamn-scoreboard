@@ -75,6 +75,8 @@ static struct {
 	struct scoreboard_penalty home_penalties[SCOREBOARD_PENALTY_SLOTS];
 	struct scoreboard_penalty away_penalties[SCOREBOARD_PENALTY_SLOTS];
 
+	char penalty_label_format[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
+
 	char output_directory[SCOREBOARD_MAX_PATH];
 
 	char cli_executable[SCOREBOARD_MAX_PATH];
@@ -391,6 +393,8 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.foul_label2[0] = '\0';
 	g_state.log_scores = true;
 	safe_copy(g_state.score_label, "Goal", sizeof(g_state.score_label));
+	safe_copy(g_state.penalty_label_format, "#{{ number }}  {{ time }}",
+		  sizeof(g_state.penalty_label_format));
 	generate_default_period_labels();
 }
 
@@ -1457,6 +1461,115 @@ void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size)
 	buf[offset] = '\0';
 }
 
+static const char *kDefaultPenaltyLabelFormat = "#{{ number }}  {{ time }}";
+
+void scoreboard_set_penalty_label_format(const char *fmt)
+{
+	safe_copy(g_state.penalty_label_format, fmt,
+		  sizeof(g_state.penalty_label_format));
+	mark_dirty();
+}
+
+const char *scoreboard_get_penalty_label_format(void)
+{
+	if (g_state.penalty_label_format[0] == '\0')
+		return kDefaultPenaltyLabelFormat;
+	return g_state.penalty_label_format;
+}
+
+/* Expand a penalty label format string for a single penalty.
+   Replaces {{ number }} with the player number and {{ time }} with
+   the remaining time.  Unknown variables become empty strings. */
+static size_t expand_penalty_format(const char *fmt, const char *number,
+				    const char *time_str, char *buf,
+				    size_t size)
+{
+	size_t out = 0;
+	const char *p = fmt;
+	while (*p != '\0' && out < size - 1) {
+		if (p[0] == '{' && p[1] == '{') {
+			const char *end = strstr(p + 2, "}}");
+			if (end == NULL) {
+				/* Unterminated — copy rest literally */
+				break;
+			}
+			/* Extract variable name, trim whitespace */
+			const char *vs = p + 2;
+			while (vs < end && *vs == ' ')
+				vs++;
+			const char *ve = end;
+			while (ve > vs && *(ve - 1) == ' ')
+				ve--;
+			size_t nlen = (size_t)(ve - vs);
+			const char *val = "";
+			if (nlen == 6 && strncmp(vs, "number", 6) == 0)
+				val = number;
+			else if (nlen == 4 && strncmp(vs, "time", 4) == 0)
+				val = time_str;
+			size_t vlen = strlen(val);
+			memcpy(buf + out, val, vlen);
+			out += vlen;
+			p = end + 2;
+		} else {
+			buf[out++] = *p++;
+		}
+	}
+	/* Copy any remaining literal text after unterminated {{ */
+	while (*p != '\0' && out < size - 1)
+		buf[out++] = *p++;
+	buf[out] = '\0';
+	return out;
+}
+
+void scoreboard_format_penalty_labels(bool home, char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	buf[0] = '\0';
+	const struct scoreboard_penalty *penalties =
+		home ? g_state.home_penalties : g_state.away_penalties;
+	const char *fmt = scoreboard_get_penalty_label_format();
+	size_t offset = 0;
+	int running = 0;
+	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
+		if (!penalties[i].active)
+			continue;
+		if (running >= SCOREBOARD_MAX_RUNNING_PENALTIES)
+			break;
+		running++;
+
+		/* Format number */
+		char num_buf[32];
+		if (penalties[i].player_number > 0)
+			snprintf(num_buf, sizeof(num_buf), "%d",
+				 penalties[i].player_number);
+		else
+			num_buf[0] = '\0';
+
+		/* Format time */
+		char time_buf[32];
+		int total_seconds = penalties[i].remaining_tenths / 10;
+		int minutes = total_seconds / 60;
+		int seconds = total_seconds % 60;
+		snprintf(time_buf, sizeof(time_buf), "%d:%02d", minutes,
+			 seconds);
+
+		/* Expand format for this penalty */
+		char line[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
+		expand_penalty_format(fmt, num_buf, time_buf, line,
+				      sizeof(line));
+		size_t len = strlen(line);
+		size_t need = (offset > 0 ? 1 : 0) + len;
+		if (offset + need >= size)
+			break;
+		if (offset > 0)
+			buf[offset++] = '\n';
+		memcpy(buf + offset, line, len);
+		offset += len;
+	}
+	buf[offset] = '\0';
+}
+
 /* ---- file output ---- */
 
 void scoreboard_set_output_directory(const char *path)
@@ -1534,6 +1647,20 @@ bool scoreboard_write_all_files(void)
 
 	scoreboard_format_all_penalty_times(false, pen_buf, sizeof(pen_buf));
 	ok = write_text_file(dir, "away_penalty_times.txt", pen_buf) && ok;
+
+	{
+		char labels_buf[512];
+		scoreboard_format_penalty_labels(true, labels_buf,
+						 sizeof(labels_buf));
+		ok = write_text_file(dir, "home_penalty_labels.txt",
+				     labels_buf) &&
+		     ok;
+		scoreboard_format_penalty_labels(false, labels_buf,
+						 sizeof(labels_buf));
+		ok = write_text_file(dir, "away_penalty_labels.txt",
+				     labels_buf) &&
+		     ok;
+	}
 
 	ok = write_text_file(dir, "sport.txt",
 			     scoreboard_sport_name(g_state.sport)) &&
@@ -1722,6 +1849,8 @@ bool scoreboard_save_state(const char *path)
 		g_state.game_clock_started ? "true" : "false");
 	fprintf(f, "  \"game_clock_display_format\": %d,\n",
 		(int)g_state.game_clock_display_format);
+	write_json_string(f, "penalty_label_format",
+			  g_state.penalty_label_format, false);
 	write_json_string(f, "home_name", g_state.home_name, false);
 	write_json_string(f, "away_name", g_state.away_name, false);
 	fprintf(f, "  \"home_score\": %d,\n", g_state.home_score);
@@ -1828,6 +1957,10 @@ bool scoreboard_load_state(const char *path)
 		(enum scoreboard_game_clock_format)parse_json_int(
 			json, "game_clock_display_format",
 			(int)g_state.game_clock_display_format);
+
+	parse_json_string(json, "penalty_label_format",
+			  g_state.penalty_label_format,
+			  sizeof(g_state.penalty_label_format));
 
 	parse_json_string(json, "home_name", g_state.home_name,
 			  sizeof(g_state.home_name));
