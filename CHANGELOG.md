@@ -16,6 +16,8 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 ### Fixed
 - "Game Finished" checkbox now resets when starting a new game — previously carried over from the prior game, causing the highlights button to show "Generate Game Highlights" instead of "Generate Period Highlights"
 - Penalty chapter markers now correctly name the penalized team instead of the opposing team, and use the label "Penalty:" instead of "Power Play:" (#13)
+- Clock adjustment on compound penalties now carries leftover time into phase 2 — previously a 60s subtraction on a 2+5 with 30s remaining would start phase 2 at 5:00 instead of the correct 4:30
+- Game Settings dialog no longer resets the clock when saving non-clock settings (e.g. penalty format, CLI path)
 
 ## [0.6.0] - 2026-04-08
 

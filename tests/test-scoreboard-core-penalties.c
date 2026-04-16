@@ -868,6 +868,63 @@ static void test_compound_adjust_phase_transition(void)
 	assert(p->phase2_tenths == 0);
 }
 
+static void test_compound_adjust_leftover_carries(void)
+{
+	/* Bug fix: when clock adjust causes phase1 to expire with leftover
+	   time, the leftover should carry into phase2.
+	   Example: 2+5 penalty with 30s left on phase1.  Subtract 1 minute.
+	   Phase1 has 300 tenths remaining.  Adjust -600 tenths (60s).
+	   remaining = 300 + (-600) = -300.  Leftover = -300.
+	   phase2 = 3000 (5 min).  New remaining = 3000 + (-300) = 2700.
+	   Phase2 should show 4:30, not 5:00. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(24, 30, 300);
+	/* Phase1 = 300 tenths (30s), phase2 = 3000 tenths (5min) */
+	const struct scoreboard_penalty *p = scoreboard_get_home_penalty(0);
+	assert(p->remaining_tenths == 300);
+	assert(p->phase2_tenths == 3000);
+
+	/* Subtract 60 seconds — 30s more than phase1 has */
+	scoreboard_penalty_adjust(-600);
+	p = scoreboard_get_home_penalty(0);
+	assert(p->active);
+	assert(p->phase2_tenths == 0);
+	/* 3000 + (-300) = 2700 tenths = 4:30 */
+	assert(p->remaining_tenths == 2700);
+}
+
+static void test_compound_adjust_leftover_clears_both(void)
+{
+	/* If the leftover exceeds phase2, the penalty clears entirely */
+	scoreboard_reset_state_for_tests();
+	scoreboard_home_penalty_add_compound(24, 10, 20);
+	/* Phase1 = 100 tenths (10s), phase2 = 200 tenths (20s) */
+
+	/* Subtract 60 seconds — exceeds both phases */
+	scoreboard_penalty_adjust(-600);
+	assert(scoreboard_get_home_penalty_count() == 0);
+}
+
+static void test_compound_adjust_away_leftover_carries(void)
+{
+	/* Same leftover carry for away team */
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(24, 30, 300);
+	scoreboard_penalty_adjust(-600);
+	const struct scoreboard_penalty *p = scoreboard_get_away_penalty(0);
+	assert(p->active);
+	assert(p->remaining_tenths == 2700);
+}
+
+static void test_compound_adjust_away_leftover_clears_both(void)
+{
+	/* Away compound penalty cleared when leftover exceeds phase2 */
+	scoreboard_reset_state_for_tests();
+	scoreboard_away_penalty_add_compound(24, 10, 20);
+	scoreboard_penalty_adjust(-600);
+	assert(scoreboard_get_away_penalty_count() == 0);
+}
+
 static void test_compound_away_phase_transition(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1243,6 +1300,10 @@ int main(void)
 	test_compound_holds_slot();
 	test_compound_clear_removes_both();
 	test_compound_adjust_phase_transition();
+	test_compound_adjust_leftover_carries();
+	test_compound_adjust_leftover_clears_both();
+	test_compound_adjust_away_leftover_carries();
+	test_compound_adjust_away_leftover_clears_both();
 	test_compound_away_phase_transition();
 	test_compound_away_adjust_transition();
 	test_compound_counts_as_one_running();

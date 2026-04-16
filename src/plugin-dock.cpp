@@ -1840,6 +1840,11 @@ void open_clock_settings_dialog(QWidget *parent)
 			 &QDialog::reject);
 	layout->addWidget(buttons);
 
+	/* Capture pre-dialog clock settings to detect changes */
+	int prev_period_length = scoreboard_get_period_length();
+	enum scoreboard_clock_direction prev_direction =
+		scoreboard_get_clock_direction();
+
 	if (dialog.exec() == QDialog::Accepted) {
 		int sport_idx = sport_combo->currentIndex();
 		if (sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
@@ -1868,7 +1873,9 @@ void open_clock_settings_dialog(QWidget *parent)
 			(enum scoreboard_game_clock_format)
 				gc_fmt_combo->currentIndex());
 		save_profile_paths();
-		scoreboard_clock_reset();
+		if (scoreboard_get_period_length() != prev_period_length ||
+		    scoreboard_get_clock_direction() != prev_direction)
+			scoreboard_clock_reset();
 		update_all_labels();
 		update_highlights_button_visibility();
 	}

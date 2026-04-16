@@ -1295,12 +1295,22 @@ void scoreboard_penalty_adjust(int delta_tenths)
 			if (g_state.home_penalties[i].remaining_tenths <= 0) {
 				if (g_state.home_penalties[i].phase2_tenths >
 				    0) {
+					int leftover =
+						g_state.home_penalties[i]
+							.remaining_tenths;
 					g_state.home_penalties[i]
 						.remaining_tenths =
 						g_state.home_penalties[i]
-							.phase2_tenths;
+							.phase2_tenths +
+						leftover;
 					g_state.home_penalties[i]
 						.phase2_tenths = 0;
+					if (g_state.home_penalties[i]
+						    .remaining_tenths <= 0) {
+						scoreboard_home_penalty_clear(
+							i);
+						cleared = true;
+					}
 				} else {
 					scoreboard_home_penalty_clear(i);
 					cleared = true;
@@ -1316,12 +1326,22 @@ void scoreboard_penalty_adjust(int delta_tenths)
 			if (g_state.away_penalties[i].remaining_tenths <= 0) {
 				if (g_state.away_penalties[i].phase2_tenths >
 				    0) {
+					int leftover =
+						g_state.away_penalties[i]
+							.remaining_tenths;
 					g_state.away_penalties[i]
 						.remaining_tenths =
 						g_state.away_penalties[i]
-							.phase2_tenths;
+							.phase2_tenths +
+						leftover;
 					g_state.away_penalties[i]
 						.phase2_tenths = 0;
+					if (g_state.away_penalties[i]
+						    .remaining_tenths <= 0) {
+						scoreboard_away_penalty_clear(
+							i);
+						cleared = true;
+					}
 				} else {
 					scoreboard_away_penalty_clear(i);
 					cleared = true;
