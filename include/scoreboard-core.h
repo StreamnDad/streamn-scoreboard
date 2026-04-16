@@ -22,6 +22,11 @@ enum scoreboard_clock_direction {
 	SCOREBOARD_CLOCK_COUNT_UP
 };
 
+enum scoreboard_game_clock_format {
+	SCOREBOARD_GAME_CLOCK_FORMAT_MMSS = 0, /* e.g. 75:30 */
+	SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS     /* e.g. 1:15:30 */
+};
+
 enum scoreboard_sport {
 	SCOREBOARD_SPORT_HOCKEY = 0,
 	SCOREBOARD_SPORT_BASKETBALL,
@@ -87,6 +92,10 @@ void scoreboard_set_game_clock_enabled(bool enabled);
 bool scoreboard_get_game_clock_enabled(void);
 int scoreboard_game_clock_get_tenths(void);
 void scoreboard_game_clock_format(char *buf, size_t size);
+void scoreboard_set_game_clock_display_format(
+	enum scoreboard_game_clock_format fmt);
+enum scoreboard_game_clock_format
+scoreboard_get_game_clock_display_format(void);
 
 /* Period */
 int scoreboard_get_period(void);

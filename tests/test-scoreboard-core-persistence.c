@@ -1361,7 +1361,7 @@ static void test_game_clock_write_file(void)
 	assert(ok);
 
 	char path[512];
-	snprintf(path, sizeof(path), "%s/game_clock.txt", g_tmp_dir);
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
 	char *content = read_file_content(path);
 	assert(content != NULL);
 	assert(strcmp(content, "1:30") == 0);
@@ -1382,7 +1382,7 @@ static void test_game_clock_no_file_when_disabled(void)
 	assert(ok);
 
 	char path[512];
-	snprintf(path, sizeof(path), "%s/game_clock.txt", g_tmp_dir);
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
 	char *content = read_file_content(path);
 	assert(content == NULL); /* file should not exist */
 
@@ -1395,6 +1395,8 @@ static void test_game_clock_save_load_state(void)
 	setup_tmp_dir();
 
 	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_game_clock_display_format(
+		SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS);
 	scoreboard_clock_start();
 	scoreboard_clock_tick(500);
 	scoreboard_period_advance(); /* accumulated = 500 */
@@ -1405,9 +1407,13 @@ static void test_game_clock_save_load_state(void)
 
 	scoreboard_reset_state_for_tests();
 	assert(!scoreboard_get_game_clock_enabled());
+	assert(scoreboard_get_game_clock_display_format() ==
+	       SCOREBOARD_GAME_CLOCK_FORMAT_MMSS);
 
 	assert(scoreboard_load_state(save_path));
 	assert(scoreboard_get_game_clock_enabled());
+	assert(scoreboard_get_game_clock_display_format() ==
+	       SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS);
 	/* After load: accumulated=500, started=true, clock reset to period_length*10.
 	   Current elapsed = period_length*10 - clock_tenths = 0.
 	   Total = 500 + 0 = 500 */

@@ -63,6 +63,7 @@ const char *kCliExtraArgsKey = "cli_extra_args";
 const char *kEnvFileKey = "environment_file";
 const char *kRecordChaptersKey = "record_chapters";
 const char *kGameClockEnabledKey = "game_clock_enabled";
+const char *kGameClockFormatKey = "game_clock_format";
 
 struct process_job {
 	int id = 0;
@@ -1163,7 +1164,7 @@ const char *kWatchedFiles[] = {
 	"default_major_penalty_duration.txt",
 	"period_labels.txt",
 	"period_length.txt",
-	"game_clock.txt",
+	"cumulative_clock.txt",
 };
 const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
 const qint64 kWriteCooldownMs = 500;
@@ -1258,6 +1259,10 @@ void load_profile_paths()
 		scoreboard_set_game_clock_enabled(config_get_bool(
 			profile_cfg, kConfigSection,
 			kGameClockEnabledKey));
+		scoreboard_set_game_clock_display_format(
+			(enum scoreboard_game_clock_format)config_get_int(
+				profile_cfg, kConfigSection,
+				kGameClockFormatKey));
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -1284,6 +1289,8 @@ void save_profile_paths()
 			g_record_chapters_enabled);
 	config_set_bool(profile_cfg, kConfigSection, kGameClockEnabledKey,
 			scoreboard_get_game_clock_enabled());
+	config_set_int(profile_cfg, kConfigSection, kGameClockFormatKey,
+		       (int)scoreboard_get_game_clock_display_format());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1768,9 +1775,22 @@ void open_clock_settings_dialog(QWidget *parent)
 	game_clock_check->setChecked(scoreboard_get_game_clock_enabled());
 	game_clock_check->setToolTip(
 		"Tracks total elapsed game time across all periods.\n"
-		"Written to game_clock.txt and displayed in the dock.\n"
+		"Written to cumulative_clock.txt and displayed in the dock.\n"
 		"When enabled, event timestamps use game clock time.");
 	layout->addWidget(game_clock_check);
+
+	QHBoxLayout *gc_fmt_row = new QHBoxLayout();
+	gc_fmt_row->addWidget(new QLabel("Clock format:", &dialog));
+	QComboBox *gc_fmt_combo = new QComboBox(&dialog);
+	gc_fmt_combo->addItem("MM:SS (e.g. 75:30)");
+	gc_fmt_combo->addItem("H:MM:SS (e.g. 1:15:30)");
+	gc_fmt_combo->setCurrentIndex(
+		(int)scoreboard_get_game_clock_display_format());
+	gc_fmt_combo->setEnabled(game_clock_check->isChecked());
+	QObject::connect(game_clock_check, &QCheckBox::toggled,
+			 gc_fmt_combo, &QComboBox::setEnabled);
+	gc_fmt_row->addWidget(gc_fmt_combo, 1);
+	layout->addLayout(gc_fmt_row);
 
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -1802,6 +1822,9 @@ void open_clock_settings_dialog(QWidget *parent)
 		g_record_chapters_enabled = chapters_check->isChecked();
 		scoreboard_set_game_clock_enabled(
 			game_clock_check->isChecked());
+		scoreboard_set_game_clock_display_format(
+			(enum scoreboard_game_clock_format)
+				gc_fmt_combo->currentIndex());
 		save_profile_paths();
 		scoreboard_clock_reset();
 		update_all_labels();

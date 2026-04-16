@@ -920,18 +920,14 @@ static void test_game_clock_format(void)
 	   Need current elapsed = 37200 - 900 = 36300 tenths.
 	   But period is 9000 tenths max (15 min). Let's test >60 min
 	   by doing multiple periods. */
-	/* Simpler: just test format with known accumulated value.
-	   Reset and set up directly. */
+	/* Test >60 min with shorter periods to stay within label limit */
 	scoreboard_reset_state_for_tests();
 	scoreboard_set_game_clock_enabled(true);
-	scoreboard_clock_start();
-	/* Tick 6000 tenths = 10 minutes */
-	scoreboard_clock_tick(6000);
-	scoreboard_period_advance(); /* accumulated = 6000 */
-	/* Do this 6 times for 60 minutes accumulated */
-	for (int i = 0; i < 5; i++) {
+	scoreboard_set_period_length(600); /* 10-min periods */
+	scoreboard_clock_reset();
+	for (int i = 0; i < 6; i++) {
 		scoreboard_clock_start();
-		scoreboard_clock_tick(6000);
+		scoreboard_clock_tick(6000); /* full 10-min period */
 		scoreboard_period_advance();
 	}
 	/* accumulated = 36000 (60 minutes) */
@@ -957,6 +953,68 @@ static void test_game_clock_format_disabled(void)
 	char buf[32];
 	scoreboard_game_clock_format(buf, sizeof(buf));
 	assert(strcmp(buf, "0:00") == 0);
+}
+
+static void test_game_clock_format_hmmss(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_game_clock_display_format(
+		SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS);
+	assert(scoreboard_get_game_clock_display_format() ==
+	       SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS);
+	char buf[32];
+
+	/* Under 1 hour — should show M:SS, not 0:MM:SS */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(900); /* 90 seconds */
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "1:30") == 0);
+
+	/* Over 1 hour — switch to H:MM:SS.
+	   Use shorter 5-min periods so we can fit enough within the
+	   default 7 period labels (3 periods + 4 OT). */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_game_clock_display_format(
+		SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS);
+	scoreboard_set_period_length(600); /* 10-min periods */
+	scoreboard_clock_reset();
+	/* 6 full periods = 60 min accumulated */
+	for (int i = 0; i < 6; i++) {
+		scoreboard_clock_start();
+		scoreboard_clock_tick(6000); /* full 10-min period */
+		scoreboard_period_advance();
+	}
+	/* 7th period: tick 930 seconds (15:30) but period is only 10 min,
+	   so clock stops at 0 after 6000 tenths. Use partial tick instead. */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(930); /* 93 seconds = 1:33 */
+	/* total = 36000 + 930 = 36930 tenths = 3693s = 1:01:33 */
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "1:01:33") == 0);
+}
+
+static void test_game_clock_format_mmss_over_hour(void)
+{
+	/* MM:SS format — minutes exceed 59 */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_game_clock_display_format(
+		SCOREBOARD_GAME_CLOCK_FORMAT_MMSS);
+	scoreboard_set_period_length(600); /* 10-min periods */
+	scoreboard_clock_reset();
+	for (int i = 0; i < 6; i++) {
+		scoreboard_clock_start();
+		scoreboard_clock_tick(6000);
+		scoreboard_period_advance();
+	}
+	scoreboard_clock_start();
+	scoreboard_clock_tick(930); /* 93 seconds */
+	char buf[32];
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	/* 36000 + 930 = 36930 tenths = 3693s = 61:33 */
+	assert(strcmp(buf, "61:33") == 0);
 }
 
 int main(void)
@@ -1043,6 +1101,8 @@ int main(void)
 	test_game_clock_format();
 	test_game_clock_format_null();
 	test_game_clock_format_disabled();
+	test_game_clock_format_hmmss();
+	test_game_clock_format_mmss_over_hour();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
 	return 0;

@@ -34,6 +34,7 @@ static struct {
 	bool game_clock_enabled;
 	int game_clock_accumulated_tenths;
 	bool game_clock_started;
+	enum scoreboard_game_clock_format game_clock_display_format;
 
 	int period;
 	bool overtime_enabled;
@@ -554,9 +555,34 @@ void scoreboard_game_clock_format(char *buf, size_t size)
 		return;
 	int tenths = scoreboard_game_clock_get_tenths();
 	int total_seconds = tenths / 10;
-	int minutes = total_seconds / 60;
-	int seconds = total_seconds % 60;
-	snprintf(buf, size, "%d:%02d", minutes, seconds);
+	if (g_state.game_clock_display_format ==
+	    SCOREBOARD_GAME_CLOCK_FORMAT_HMMSS) {
+		int hours = total_seconds / 3600;
+		int minutes = (total_seconds % 3600) / 60;
+		int seconds = total_seconds % 60;
+		if (hours > 0)
+			snprintf(buf, size, "%d:%02d:%02d", hours, minutes,
+				 seconds);
+		else
+			snprintf(buf, size, "%d:%02d", minutes, seconds);
+	} else {
+		int minutes = total_seconds / 60;
+		int seconds = total_seconds % 60;
+		snprintf(buf, size, "%d:%02d", minutes, seconds);
+	}
+}
+
+void scoreboard_set_game_clock_display_format(
+	enum scoreboard_game_clock_format fmt)
+{
+	g_state.game_clock_display_format = fmt;
+	mark_dirty();
+}
+
+enum scoreboard_game_clock_format
+scoreboard_get_game_clock_display_format(void)
+{
+	return g_state.game_clock_display_format;
 }
 
 /* ---- period ---- */
@@ -1535,7 +1561,7 @@ bool scoreboard_write_all_files(void)
 	if (g_state.game_clock_enabled) {
 		char gc_buf[32];
 		scoreboard_game_clock_format(gc_buf, sizeof(gc_buf));
-		ok = write_text_file(dir, "game_clock.txt", gc_buf) && ok;
+		ok = write_text_file(dir, "cumulative_clock.txt", gc_buf) && ok;
 	}
 
 	g_dirty = false;
@@ -1694,6 +1720,8 @@ bool scoreboard_save_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	fprintf(f, "  \"game_clock_started\": %s,\n",
 		g_state.game_clock_started ? "true" : "false");
+	fprintf(f, "  \"game_clock_display_format\": %d,\n",
+		(int)g_state.game_clock_display_format);
 	write_json_string(f, "home_name", g_state.home_name, false);
 	write_json_string(f, "away_name", g_state.away_name, false);
 	fprintf(f, "  \"home_score\": %d,\n", g_state.home_score);
@@ -1796,6 +1824,10 @@ bool scoreboard_load_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	g_state.game_clock_started = parse_json_bool(
 		json, "game_clock_started", g_state.game_clock_started);
+	g_state.game_clock_display_format =
+		(enum scoreboard_game_clock_format)parse_json_int(
+			json, "game_clock_display_format",
+			(int)g_state.game_clock_display_format);
 
 	parse_json_string(json, "home_name", g_state.home_name,
 			  sizeof(g_state.home_name));
