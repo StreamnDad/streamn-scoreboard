@@ -1638,8 +1638,13 @@ void open_clock_settings_dialog(QWidget *parent)
 		"Variables:\n"
 		"  {{ number }} \xe2\x80\x94 player number\n"
 		"  {{ time }} \xe2\x80\x94 time remaining (M:SS)\n"
-		"  {{ phase2 }} \xe2\x80\x94 phase 2 time for compound "
-		"penalties (2+2, 2+10), empty for regular");
+		"  {{ phase2 }} \xe2\x80\x94 phase 2 time (compound only)\n\n"
+		"Conditional (compound penalties only):\n"
+		"  {{ if_phase2 }}...{{ end_if }}\n\n"
+		"Example: #{{ number }} {{ time }}"
+		"{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}\n"
+		"\xe2\x86\x92 Compound: #23 1:57 (+5:00)\n"
+		"\xe2\x86\x92 Regular:  #23 1:57");
 	pen_label_row->addWidget(pen_label_input, 1);
 	layout->addLayout(pen_label_row);
 

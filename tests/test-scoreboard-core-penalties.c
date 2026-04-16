@@ -1187,6 +1187,43 @@ static void test_format_penalty_labels_phase2_regular(void)
 	assert(strcmp(buf, "#88  2:00") == 0);
 }
 
+static void test_format_penalty_labels_if_phase2_compound(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }} {{ time }}"
+		"{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}");
+	scoreboard_home_penalty_add_compound(23, 120, 300);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#23 2:00 (+5:00)") == 0);
+}
+
+static void test_format_penalty_labels_if_phase2_regular(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }} {{ time }}"
+		"{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}");
+	scoreboard_home_penalty_add(23, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	/* Regular penalty — if_phase2 block is skipped */
+	assert(strcmp(buf, "#23 2:00") == 0);
+}
+
+static void test_format_penalty_labels_if_phase2_no_end(void)
+{
+	/* Missing end_if — rest of template is skipped when phase2 empty */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}{{ if_phase2 }} extra");
+	scoreboard_home_penalty_add(23, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#23") == 0);
+}
+
 static void test_format_penalty_labels_long_format(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1332,6 +1369,9 @@ int main(void)
 	test_format_penalty_labels_overflow_lines();
 	test_format_penalty_labels_compound();
 	test_format_penalty_labels_phase2_regular();
+	test_format_penalty_labels_if_phase2_compound();
+	test_format_penalty_labels_if_phase2_regular();
+	test_format_penalty_labels_if_phase2_no_end();
 	test_format_penalty_labels_long_format();
 	test_format_penalty_labels_many_penalties();
 

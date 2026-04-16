@@ -1522,6 +1522,63 @@ static size_t expand_penalty_format(const char *fmt, const char *number,
 			while (ve > vs && *(ve - 1) == ' ')
 				ve--;
 			size_t nlen = (size_t)(ve - vs);
+			if (nlen == 9 &&
+			    strncmp(vs, "if_phase2", 9) == 0) {
+				/* Conditional block: skip to end_if when
+				   phase2 is empty */
+				p = end + 2;
+				if (phase2_str[0] == '\0') {
+					const char *skip = p;
+					while (*skip != '\0') {
+						if (skip[0] == '{' &&
+						    skip[1] == '{') {
+							const char *se =
+								strstr(skip +
+									       2,
+								       "}}");
+							if (se != NULL) {
+								const char *ts =
+									skip +
+									2;
+								while (ts <
+									       se &&
+								       *ts ==
+									       ' ')
+									ts++;
+								const char *te =
+									se;
+								while (te >
+									       ts &&
+								       *(te - 1) ==
+									       ' ')
+									te--;
+								if ((size_t)(
+									    te -
+									    ts) ==
+									    6 &&
+								    strncmp(ts,
+									    "end_if",
+									    6) ==
+									    0) {
+									p = se +
+									    2;
+									break;
+								}
+							}
+						}
+						skip++;
+					}
+					if (*skip == '\0')
+						p = skip;
+				}
+				continue;
+			}
+			if (nlen == 6 &&
+			    strncmp(vs, "end_if", 6) == 0) {
+				/* End of conditional block — just skip */
+				p = end + 2;
+				continue;
+			}
 			const char *val = "";
 			if (nlen == 6 && strncmp(vs, "number", 6) == 0)
 				val = number;
