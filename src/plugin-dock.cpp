@@ -1620,8 +1620,12 @@ void open_clock_settings_dialog(QWidget *parent)
 	major_pen_dur_row->addWidget(major_pen_dur_spin);
 	layout->addLayout(major_pen_dur_row);
 
+	QLabel *pen_label_header =
+		new QLabel("<b>Custom Penalty Labels</b>", &dialog);
+	layout->addWidget(pen_label_header);
+
 	QHBoxLayout *pen_label_row = new QHBoxLayout();
-	QLabel *pen_label_label = new QLabel("Penalty label:", &dialog);
+	QLabel *pen_label_label = new QLabel("Format:", &dialog);
 	pen_label_row->addWidget(pen_label_label);
 	QLineEdit *pen_label_input = new QLineEdit(&dialog);
 	pen_label_input->setText(QString::fromUtf8(
@@ -1629,10 +1633,13 @@ void open_clock_settings_dialog(QWidget *parent)
 	pen_label_input->setPlaceholderText("#{{ number }}  {{ time }}");
 	pen_label_input->setToolTip(
 		"Format for combined penalty label files "
-		"(home_penalty_labels.txt, away_penalty_labels.txt).\n\n"
+		"(home_penalty_labels.txt, away_penalty_labels.txt).\n"
+		"One line per active penalty, empty when no penalties.\n\n"
 		"Variables:\n"
 		"  {{ number }} \xe2\x80\x94 player number\n"
-		"  {{ time }} \xe2\x80\x94 time remaining (M:SS)");
+		"  {{ time }} \xe2\x80\x94 time remaining (M:SS)\n"
+		"  {{ phase2 }} \xe2\x80\x94 phase 2 time for compound "
+		"penalties (2+2, 2+10), empty for regular");
 	pen_label_row->addWidget(pen_label_input, 1);
 	layout->addLayout(pen_label_row);
 
@@ -1657,8 +1664,8 @@ void open_clock_settings_dialog(QWidget *parent)
 	QObject::connect(
 		sport_combo, qOverload<int>(&QComboBox::currentIndexChanged),
 		[len_spin, down_btn, up_btn, pen_dur_spin, pen_dur_label,
-		 major_pen_dur_spin, major_pen_dur_label, pen_label_label,
-		 pen_label_input](int index) {
+		 major_pen_dur_spin, major_pen_dur_label, pen_label_header,
+		 pen_label_label, pen_label_input](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1675,6 +1682,7 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->setVisible(info.has_penalties);
 			major_pen_dur_label->setVisible(info.has_penalties);
 			major_pen_dur_spin->setVisible(info.has_penalties);
+			pen_label_header->setVisible(info.has_penalties);
 			pen_label_label->setVisible(info.has_penalties);
 			pen_label_input->setVisible(info.has_penalties);
 		});
@@ -1798,6 +1806,9 @@ void open_clock_settings_dialog(QWidget *parent)
 			"MP4 output format.");
 	}
 	layout->addWidget(chapters_check);
+
+	QLabel *gc_header = new QLabel("<b>Game Clock</b>", &dialog);
+	layout->addWidget(gc_header);
 
 	QCheckBox *game_clock_check =
 		new QCheckBox("Show cumulative game clock", &dialog);

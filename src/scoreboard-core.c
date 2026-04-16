@@ -1481,7 +1481,8 @@ const char *scoreboard_get_penalty_label_format(void)
    Replaces {{ number }} with the player number and {{ time }} with
    the remaining time.  Unknown variables become empty strings. */
 static size_t expand_penalty_format(const char *fmt, const char *number,
-				    const char *time_str, char *buf,
+				    const char *time_str,
+				    const char *phase2_str, char *buf,
 				    size_t size)
 {
 	size_t out = 0;
@@ -1506,6 +1507,8 @@ static size_t expand_penalty_format(const char *fmt, const char *number,
 				val = number;
 			else if (nlen == 4 && strncmp(vs, "time", 4) == 0)
 				val = time_str;
+			else if (nlen == 6 && strncmp(vs, "phase2", 6) == 0)
+				val = phase2_str;
 			size_t vlen = strlen(val);
 			memcpy(buf + out, val, vlen);
 			out += vlen;
@@ -1554,10 +1557,22 @@ void scoreboard_format_penalty_labels(bool home, char *buf, size_t size)
 		snprintf(time_buf, sizeof(time_buf), "%d:%02d", minutes,
 			 seconds);
 
+		/* Format phase2 (compound penalties only) */
+		char phase2_buf[32];
+		if (penalties[i].phase2_tenths > 0) {
+			int p2_secs = penalties[i].phase2_tenths / 10;
+			int p2_min = p2_secs / 60;
+			int p2_sec = p2_secs % 60;
+			snprintf(phase2_buf, sizeof(phase2_buf), "%d:%02d",
+				 p2_min, p2_sec);
+		} else {
+			phase2_buf[0] = '\0';
+		}
+
 		/* Expand format for this penalty */
 		char line[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
-		expand_penalty_format(fmt, num_buf, time_buf, line,
-				      sizeof(line));
+		expand_penalty_format(fmt, num_buf, time_buf, phase2_buf,
+				      line, sizeof(line));
 		size_t len = strlen(line);
 		size_t need = (offset > 0 ? 1 : 0) + len;
 		if (offset + need >= size)

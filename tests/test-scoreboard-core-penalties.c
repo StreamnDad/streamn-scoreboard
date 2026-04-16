@@ -1107,6 +1107,29 @@ static void test_format_penalty_labels_overflow_lines(void)
 	assert(strcmp(buf, "#88  2:00") == 0);
 }
 
+static void test_format_penalty_labels_compound(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}  {{ time }}+{{ phase2 }}");
+	scoreboard_home_penalty_add_compound(88, 120, 600);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00+10:00") == 0);
+}
+
+static void test_format_penalty_labels_phase2_regular(void)
+{
+	/* Regular penalty — phase2 resolves to empty string */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_penalty_label_format(
+		"#{{ number }}  {{ time }}{{ phase2 }}");
+	scoreboard_home_penalty_add(88, 120);
+	char buf[256];
+	scoreboard_format_penalty_labels(true, buf, sizeof(buf));
+	assert(strcmp(buf, "#88  2:00") == 0);
+}
+
 static void test_format_penalty_labels_long_format(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1246,6 +1269,8 @@ int main(void)
 	test_format_penalty_labels_unterminated();
 	test_format_penalty_labels_small_buf();
 	test_format_penalty_labels_overflow_lines();
+	test_format_penalty_labels_compound();
+	test_format_penalty_labels_phase2_regular();
 	test_format_penalty_labels_long_format();
 	test_format_penalty_labels_many_penalties();
 
