@@ -1630,7 +1630,8 @@ void open_clock_settings_dialog(QWidget *parent)
 	QLineEdit *pen_label_input = new QLineEdit(&dialog);
 	pen_label_input->setText(QString::fromUtf8(
 		scoreboard_get_penalty_label_format()));
-	pen_label_input->setPlaceholderText("#{{ number }}  {{ time }}");
+	pen_label_input->setPlaceholderText(
+		"#{{ number }}  {{ time }}{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}");
 	pen_label_input->setToolTip(
 		"Format for combined penalty label files "
 		"(home_penalty_labels.txt, away_penalty_labels.txt).\n"
@@ -1647,6 +1648,26 @@ void open_clock_settings_dialog(QWidget *parent)
 		"\xe2\x86\x92 Regular:  #23 1:57");
 	pen_label_row->addWidget(pen_label_input, 1);
 	layout->addLayout(pen_label_row);
+
+	QLabel *pen_preview_label = new QLabel(&dialog);
+	pen_preview_label->setStyleSheet(
+		"font-size: 11px; color: gray; padding-left: 4px;");
+	pen_preview_label->setWordWrap(true);
+	layout->addWidget(pen_preview_label);
+
+	auto update_pen_preview = [pen_preview_label,
+				   pen_label_input]() {
+		char buf[512];
+		scoreboard_preview_penalty_label(
+			pen_label_input->text().toUtf8().constData(), buf,
+			sizeof(buf));
+		QString preview = QString::fromUtf8(buf);
+		preview.replace("\n", "\n");
+		pen_preview_label->setText("Preview:\n" + preview);
+	};
+	update_pen_preview();
+	QObject::connect(pen_label_input, &QLineEdit::textChanged,
+			 [update_pen_preview]() { update_pen_preview(); });
 
 	/* Preset duration/direction/features per sport (mirrors core table) */
 	struct sport_ui_info {
@@ -1670,7 +1691,8 @@ void open_clock_settings_dialog(QWidget *parent)
 		sport_combo, qOverload<int>(&QComboBox::currentIndexChanged),
 		[len_spin, down_btn, up_btn, pen_dur_spin, pen_dur_label,
 		 major_pen_dur_spin, major_pen_dur_label, pen_label_header,
-		 pen_label_label, pen_label_input](int index) {
+		 pen_label_label, pen_label_input,
+		 pen_preview_label](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1690,6 +1712,7 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_label_header->setVisible(info.has_penalties);
 			pen_label_label->setVisible(info.has_penalties);
 			pen_label_input->setVisible(info.has_penalties);
+			pen_preview_label->setVisible(info.has_penalties);
 		});
 
 	/* Period labels button */

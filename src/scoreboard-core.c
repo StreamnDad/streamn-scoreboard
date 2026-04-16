@@ -92,6 +92,9 @@ static struct {
 
 static bool g_dirty;
 
+static const char *kDefaultPenaltyLabelFormat =
+	"#{{ number }}  {{ time }}{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}";
+
 /* ---- game event log ---- */
 static struct scoreboard_game_event
 	g_event_log[SCOREBOARD_MAX_EVENTS];
@@ -393,7 +396,7 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.foul_label2[0] = '\0';
 	g_state.log_scores = true;
 	safe_copy(g_state.score_label, "Goal", sizeof(g_state.score_label));
-	safe_copy(g_state.penalty_label_format, "#{{ number }}  {{ time }}",
+	safe_copy(g_state.penalty_label_format, kDefaultPenaltyLabelFormat,
 		  sizeof(g_state.penalty_label_format));
 	generate_default_period_labels();
 }
@@ -1481,8 +1484,6 @@ void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size)
 	buf[offset] = '\0';
 }
 
-static const char *kDefaultPenaltyLabelFormat = "#{{ number }}  {{ time }}";
-
 void scoreboard_set_penalty_label_format(const char *fmt)
 {
 	safe_copy(g_state.penalty_label_format, fmt,
@@ -1660,6 +1661,25 @@ void scoreboard_format_penalty_labels(bool home, char *buf, size_t size)
 		offset += len;
 	}
 	buf[offset] = '\0';
+}
+
+void scoreboard_preview_penalty_label(const char *fmt, char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	if (fmt == NULL || fmt[0] == '\0')
+		fmt = kDefaultPenaltyLabelFormat;
+
+	/* Sample regular penalty: #23, 1:30 remaining */
+	char line1[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
+	expand_penalty_format(fmt, "23", "1:30", "", line1, sizeof(line1));
+
+	/* Sample compound penalty: #88, 0:45 phase1, 5:00 phase2 */
+	char line2[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
+	expand_penalty_format(fmt, "88", "0:45", "5:00", line2,
+			      sizeof(line2));
+
+	snprintf(buf, size, "%s\n%s", line1, line2);
 }
 
 /* ---- file output ---- */

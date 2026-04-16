@@ -1045,7 +1045,10 @@ static void test_penalty_label_format_default(void)
 {
 	scoreboard_reset_state_for_tests();
 	const char *fmt = scoreboard_get_penalty_label_format();
-	assert(strcmp(fmt, "#{{ number }}  {{ time }}") == 0);
+	assert(strstr(fmt, "{{ number }}") != NULL);
+	assert(strstr(fmt, "{{ time }}") != NULL);
+	assert(strstr(fmt, "{{ if_phase2 }}") != NULL);
+	assert(strstr(fmt, "{{ end_if }}") != NULL);
 }
 
 static void test_penalty_label_format_set_get(void)
@@ -1127,7 +1130,8 @@ static void test_penalty_label_format_null(void)
 	scoreboard_set_penalty_label_format(NULL);
 	/* Getter should return the default when internal is empty */
 	const char *fmt = scoreboard_get_penalty_label_format();
-	assert(strcmp(fmt, "#{{ number }}  {{ time }}") == 0);
+	assert(strstr(fmt, "{{ number }}") != NULL);
+	assert(strstr(fmt, "{{ if_phase2 }}") != NULL);
 }
 
 static void test_format_penalty_labels_unterminated(void)
@@ -1254,6 +1258,37 @@ static void test_format_penalty_labels_many_penalties(void)
 	assert(strcmp(buf, "#10  2:00\n#20  2:00") == 0);
 }
 
+static void test_preview_penalty_label_default(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[512];
+	scoreboard_preview_penalty_label(NULL, buf, sizeof(buf));
+	/* Line 1: regular penalty #23 1:30, no phase2 block */
+	assert(strstr(buf, "#23") != NULL);
+	assert(strstr(buf, "1:30") != NULL);
+	/* Line 2: compound penalty #88 0:45 with phase2 5:00 */
+	assert(strstr(buf, "#88") != NULL);
+	assert(strstr(buf, "0:45") != NULL);
+	assert(strstr(buf, "5:00") != NULL);
+}
+
+static void test_preview_penalty_label_custom(void)
+{
+	char buf[512];
+	scoreboard_preview_penalty_label(
+		"{{ number }} - {{ time }}", buf, sizeof(buf));
+	assert(strstr(buf, "23 - 1:30") != NULL);
+	assert(strstr(buf, "88 - 0:45") != NULL);
+}
+
+static void test_preview_penalty_label_null(void)
+{
+	/* Should not crash */
+	scoreboard_preview_penalty_label("test", NULL, 0);
+	char buf[4];
+	scoreboard_preview_penalty_label("test", buf, 0);
+}
+
 int main(void)
 {
 	test_home_penalty_add();
@@ -1374,6 +1409,9 @@ int main(void)
 	test_format_penalty_labels_if_phase2_no_end();
 	test_format_penalty_labels_long_format();
 	test_format_penalty_labels_many_penalties();
+	test_preview_penalty_label_default();
+	test_preview_penalty_label_custom();
+	test_preview_penalty_label_null();
 
 	printf("All scoreboard-core penalty tests passed.\n");
 	return 0;

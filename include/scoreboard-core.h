@@ -210,6 +210,7 @@ void scoreboard_format_all_penalty_times(bool home, char *buf, size_t size);
 void scoreboard_set_penalty_label_format(const char *fmt);
 const char *scoreboard_get_penalty_label_format(void);
 void scoreboard_format_penalty_labels(bool home, char *buf, size_t size);
+void scoreboard_preview_penalty_label(const char *fmt, char *buf, size_t size);
 
 /* Dirty flag — true when internal state has changed since last write */
 bool scoreboard_is_dirty(void);

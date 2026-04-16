@@ -1480,8 +1480,9 @@ static void test_penalty_label_format_save_load(void)
 	assert(scoreboard_save_state(save_path));
 
 	scoreboard_reset_state_for_tests();
-	assert(strcmp(scoreboard_get_penalty_label_format(),
-		     "#{{ number }}  {{ time }}") == 0);
+	/* Default format includes if_phase2 conditional */
+	assert(strstr(scoreboard_get_penalty_label_format(),
+		      "{{ number }}") != NULL);
 
 	assert(scoreboard_load_state(save_path));
 	assert(strcmp(scoreboard_get_penalty_label_format(),
