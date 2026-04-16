@@ -13,7 +13,7 @@ OBS Studio plugin that tracks live game scoreboard state and writes it to indivi
 ## Features
 
 - **7 sport presets** — hockey, basketball, soccer, football, lacrosse, rugby, and generic
-- **17 text files** updated in real-time: clock, period, scores, shots, team names, penalties, fouls, and sport
+- **27 text files** updated in real-time: clock, period, scores, shots, team names, penalties, penalty labels, fouls, sport, and more
 - **Dock UI** with full scoreboard controls in an OBS dock panel
 - **45 OBS hotkeys** for hands-free operation during broadcasts
 - **Penalty tracking** with automatic countdown timers, compound penalties (2+2, 2+5, 2+10), edit/clear per slot (hockey, lacrosse, rugby)
@@ -21,6 +21,8 @@ OBS Studio plugin that tracks live game scoreboard state and writes it to indivi
 - **reeln-cli integration** for automated highlight generation
 - **Game event timestamps** — YouTube chapter markers copied to clipboard for livestream descriptions
 - **Recording chapter markers** — game events written to a `.chapters.txt` companion file next to each recording; also embedded directly into Hybrid MP4/MOV recordings on OBS 32+
+- **Cumulative game clock** — opt-in clock counting up from 0:00 across all periods, written to `cumulative_clock.txt`, with configurable display format (MM:SS or H:MM:SS)
+- **Custom penalty labels** — combined penalty number + time in a single file per team (`home_penalty_labels.txt`, `away_penalty_labels.txt`) with configurable format template and compound penalty support
 
 Build your own scorebug overlay using OBS Text sources pointed at the output files:
 
@@ -133,6 +135,15 @@ Set an output directory in the dock settings. The plugin writes these files on e
 | `home_fouls2.txt` | Home second counter (e.g. red cards) | `0` |
 | `away_fouls2.txt` | Away second counter (e.g. red cards) | `1` |
 | `sport.txt` | Active sport preset | `hockey` |
+| `home_penalty_labels.txt` | Combined penalty number + time (one per line) | `#12  1:32` |
+| `away_penalty_labels.txt` | Combined penalty number + time (one per line) | `#19  0:22` |
+| `home_faceoffs.txt` | Home faceoff wins | `8` |
+| `away_faceoffs.txt` | Away faceoff wins | `6` |
+| `cumulative_clock.txt` | Cumulative game clock (when enabled) | `32:15` |
+| `period_length.txt` | Period length in seconds | `900` |
+| `period_labels.txt` | Period display names | `1,2,3,OT` |
+| `default_penalty_duration.txt` | Minor penalty duration (seconds) | `120` |
+| `default_major_penalty_duration.txt` | Major penalty duration (seconds) | `300` |
 
 Not all files are relevant for every sport — shots are only tracked for hockey and lacrosse, penalties for hockey/lacrosse/rugby, and fouls for basketball/soccer/football. Files for inactive features still exist but won't change.
 
