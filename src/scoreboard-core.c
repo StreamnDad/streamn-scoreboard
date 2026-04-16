@@ -31,6 +31,10 @@ static struct {
 	enum scoreboard_clock_direction clock_direction;
 	int period_length;
 
+	bool game_clock_enabled;
+	int game_clock_accumulated_tenths;
+	bool game_clock_started;
+
 	int period;
 	bool overtime_enabled;
 	int default_penalty_duration;
@@ -394,6 +398,7 @@ void scoreboard_reset_state_for_tests(void)
 void scoreboard_clock_start(void)
 {
 	g_state.clock_running = true;
+	g_state.game_clock_started = true;
 	mark_dirty();
 }
 
@@ -514,6 +519,46 @@ int scoreboard_get_period_length(void)
 	return g_state.period_length;
 }
 
+/* ---- game clock (cumulative) ---- */
+
+static int current_period_elapsed_tenths(void)
+{
+	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN)
+		return g_state.period_length * 10 - g_state.clock_tenths;
+	else
+		return g_state.clock_tenths;
+}
+
+void scoreboard_set_game_clock_enabled(bool enabled)
+{
+	g_state.game_clock_enabled = enabled;
+	mark_dirty();
+}
+
+bool scoreboard_get_game_clock_enabled(void)
+{
+	return g_state.game_clock_enabled;
+}
+
+int scoreboard_game_clock_get_tenths(void)
+{
+	if (!g_state.game_clock_enabled || !g_state.game_clock_started)
+		return 0;
+	return g_state.game_clock_accumulated_tenths +
+	       current_period_elapsed_tenths();
+}
+
+void scoreboard_game_clock_format(char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	int tenths = scoreboard_game_clock_get_tenths();
+	int total_seconds = tenths / 10;
+	int minutes = total_seconds / 60;
+	int seconds = total_seconds % 60;
+	snprintf(buf, size, "%d:%02d", minutes, seconds);
+}
+
 /* ---- period ---- */
 
 int scoreboard_get_period(void)
@@ -534,6 +579,9 @@ void scoreboard_set_period(int period)
 void scoreboard_period_advance(void)
 {
 	if (g_state.period < g_state.period_label_count) {
+		if (g_state.game_clock_enabled && g_state.game_clock_started)
+			g_state.game_clock_accumulated_tenths +=
+				current_period_elapsed_tenths();
 		g_state.period++;
 		scoreboard_clock_reset();
 		mark_dirty();
@@ -543,6 +591,12 @@ void scoreboard_period_advance(void)
 void scoreboard_period_rewind(void)
 {
 	if (g_state.period > 1) {
+		if (g_state.game_clock_enabled && g_state.game_clock_started) {
+			g_state.game_clock_accumulated_tenths -=
+				g_state.period_length * 10;
+			if (g_state.game_clock_accumulated_tenths < 0)
+				g_state.game_clock_accumulated_tenths = 0;
+		}
 		g_state.period--;
 		scoreboard_clock_reset();
 		mark_dirty();
@@ -1478,6 +1532,12 @@ bool scoreboard_write_all_files(void)
 	snprintf(buf, sizeof(buf), "%d", g_state.period_length);
 	ok = write_text_file(dir, "period_length.txt", buf) && ok;
 
+	if (g_state.game_clock_enabled) {
+		char gc_buf[32];
+		scoreboard_game_clock_format(gc_buf, sizeof(gc_buf));
+		ok = write_text_file(dir, "game_clock.txt", gc_buf) && ok;
+	}
+
 	g_dirty = false;
 	return ok;
 }
@@ -1628,6 +1688,12 @@ bool scoreboard_save_state(const char *path)
 	fprintf(f, "  \"period\": %d,\n", g_state.period);
 	fprintf(f, "  \"overtime_enabled\": %s,\n",
 		g_state.overtime_enabled ? "true" : "false");
+	fprintf(f, "  \"game_clock_enabled\": %s,\n",
+		g_state.game_clock_enabled ? "true" : "false");
+	fprintf(f, "  \"game_clock_accumulated_tenths\": %d,\n",
+		g_state.game_clock_accumulated_tenths);
+	fprintf(f, "  \"game_clock_started\": %s,\n",
+		g_state.game_clock_started ? "true" : "false");
 	write_json_string(f, "home_name", g_state.home_name, false);
 	write_json_string(f, "away_name", g_state.away_name, false);
 	fprintf(f, "  \"home_score\": %d,\n", g_state.home_score);
@@ -1723,6 +1789,13 @@ bool scoreboard_load_state(const char *path)
 	g_state.period = parse_json_int(json, "period", g_state.period);
 	g_state.overtime_enabled = parse_json_bool(json, "overtime_enabled",
 						   g_state.overtime_enabled);
+	g_state.game_clock_enabled = parse_json_bool(
+		json, "game_clock_enabled", g_state.game_clock_enabled);
+	g_state.game_clock_accumulated_tenths = parse_json_int(
+		json, "game_clock_accumulated_tenths",
+		g_state.game_clock_accumulated_tenths);
+	g_state.game_clock_started = parse_json_bool(
+		json, "game_clock_started", g_state.game_clock_started);
 
 	parse_json_string(json, "home_name", g_state.home_name,
 			  sizeof(g_state.home_name));
@@ -1828,6 +1901,9 @@ void scoreboard_new_game(void)
 		g_state.away_penalties[i].remaining_tenths = 0;
 		g_state.away_penalties[i].phase2_tenths = 0;
 	}
+
+	g_state.game_clock_accumulated_tenths = 0;
+	g_state.game_clock_started = false;
 
 	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN)
 		g_state.clock_tenths = g_state.period_length * 10;

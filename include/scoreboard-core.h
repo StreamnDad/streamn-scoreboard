@@ -82,6 +82,12 @@ enum scoreboard_clock_direction scoreboard_get_clock_direction(void);
 void scoreboard_set_period_length(int seconds);
 int scoreboard_get_period_length(void);
 
+/* Game clock (cumulative, counts up across all periods) */
+void scoreboard_set_game_clock_enabled(bool enabled);
+bool scoreboard_get_game_clock_enabled(void);
+int scoreboard_game_clock_get_tenths(void);
+void scoreboard_game_clock_format(char *buf, size_t size);
+
 /* Period */
 int scoreboard_get_period(void);
 void scoreboard_set_period(int period);

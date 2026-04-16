@@ -62,6 +62,7 @@ const char *kCliExecutableKey = "cli_executable";
 const char *kCliExtraArgsKey = "cli_extra_args";
 const char *kEnvFileKey = "environment_file";
 const char *kRecordChaptersKey = "record_chapters";
+const char *kGameClockEnabledKey = "game_clock_enabled";
 
 struct process_job {
 	int id = 0;
@@ -91,6 +92,7 @@ struct penalty_row_widgets {
 /* Global state */
 QWidget *g_dock_widget = nullptr;
 QLabel *g_clock_label = nullptr;
+QLabel *g_game_clock_label = nullptr;
 QLabel *g_period_label = nullptr;
 QLineEdit *g_home_name_edit = nullptr;
 QLineEdit *g_away_name_edit = nullptr;
@@ -631,9 +633,14 @@ static const int kGoalDelaySeconds = 10;
 
 void log_event(const char *label)
 {
-	int offset = stream_offset_seconds();
-	if (offset < 0)
-		return;
+	int offset;
+	if (scoreboard_get_game_clock_enabled()) {
+		offset = scoreboard_game_clock_get_tenths() / 10;
+	} else {
+		offset = stream_offset_seconds();
+		if (offset < 0)
+			return;
+	}
 	scoreboard_event_log_add(offset, label);
 	write_timestamps_file();
 	update_copy_timestamps_visibility();
@@ -641,7 +648,7 @@ void log_event(const char *label)
 
 void log_event_with_offset(const char *label, int offset)
 {
-	if (!g_stream_active)
+	if (!scoreboard_get_game_clock_enabled() && !g_stream_active)
 		return;
 	if (offset < 0)
 		offset = 0;
@@ -704,9 +711,15 @@ void log_goal_event(bool home)
 		 scoreboard_get_home_score(),
 		 scoreboard_get_away_score());
 
-	int offset = stream_offset_seconds();
-	if (offset >= 0)
+	if (scoreboard_get_game_clock_enabled()) {
+		int offset = scoreboard_game_clock_get_tenths() / 10;
 		log_event_with_offset(buf, offset - kGoalDelaySeconds);
+	} else {
+		int offset = stream_offset_seconds();
+		if (offset >= 0)
+			log_event_with_offset(buf,
+					      offset - kGoalDelaySeconds);
+	}
 	add_recording_chapter_delayed(buf, kGoalDelaySeconds);
 }
 
@@ -891,6 +904,17 @@ void update_all_labels()
 		QString seg = QString::fromUtf8(scoreboard_get_segment_name());
 		g_period_label->setText(seg + ": " +
 					QString::fromUtf8(buf));
+	}
+	if (g_game_clock_label) {
+		if (scoreboard_get_game_clock_enabled()) {
+			char gc_buf[32];
+			scoreboard_game_clock_format(gc_buf, sizeof(gc_buf));
+			g_game_clock_label->setText(
+				"(" + QString::fromUtf8(gc_buf) + ")");
+			g_game_clock_label->setVisible(true);
+		} else {
+			g_game_clock_label->setVisible(false);
+		}
 	}
 	if (g_shots_row_widget)
 		g_shots_row_widget->setVisible(scoreboard_get_has_shots());
@@ -1139,6 +1163,7 @@ const char *kWatchedFiles[] = {
 	"default_major_penalty_duration.txt",
 	"period_labels.txt",
 	"period_length.txt",
+	"game_clock.txt",
 };
 const int kWatchedFileCount = sizeof(kWatchedFiles) / sizeof(kWatchedFiles[0]);
 const qint64 kWriteCooldownMs = 500;
@@ -1230,6 +1255,9 @@ void load_profile_paths()
 					     kEnvFileKey);
 		g_record_chapters_enabled = config_get_bool(
 			profile_cfg, kConfigSection, kRecordChaptersKey);
+		scoreboard_set_game_clock_enabled(config_get_bool(
+			profile_cfg, kConfigSection,
+			kGameClockEnabledKey));
 	}
 
 	scoreboard_set_output_directory(output_dir);
@@ -1254,6 +1282,8 @@ void save_profile_paths()
 			  g_environment_file.toUtf8().constData());
 	config_set_bool(profile_cfg, kConfigSection, kRecordChaptersKey,
 			g_record_chapters_enabled);
+	config_set_bool(profile_cfg, kConfigSection, kGameClockEnabledKey,
+			scoreboard_get_game_clock_enabled());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1733,6 +1763,15 @@ void open_clock_settings_dialog(QWidget *parent)
 	}
 	layout->addWidget(chapters_check);
 
+	QCheckBox *game_clock_check =
+		new QCheckBox("Show cumulative game clock", &dialog);
+	game_clock_check->setChecked(scoreboard_get_game_clock_enabled());
+	game_clock_check->setToolTip(
+		"Tracks total elapsed game time across all periods.\n"
+		"Written to game_clock.txt and displayed in the dock.\n"
+		"When enabled, event timestamps use game clock time.");
+	layout->addWidget(game_clock_check);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1761,6 +1800,8 @@ void open_clock_settings_dialog(QWidget *parent)
 			cli_args_input->text().trimmed().toUtf8().constData());
 		g_environment_file = env_file_input->text().trimmed();
 		g_record_chapters_enabled = chapters_check->isChecked();
+		scoreboard_set_game_clock_enabled(
+			game_clock_check->isChecked());
 		save_profile_paths();
 		scoreboard_clock_reset();
 		update_all_labels();
@@ -2687,6 +2728,12 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	period_row->addWidget(g_period_label, 1);
 	period_row->addWidget(g_period_adv_btn);
 	root->addLayout(period_row);
+
+	g_game_clock_label = new QLabel("", widget);
+	g_game_clock_label->setAlignment(Qt::AlignCenter);
+	g_game_clock_label->setStyleSheet("font-size: 12px; color: gray;");
+	g_game_clock_label->setVisible(false);
+	root->addWidget(g_game_clock_label);
 
 	/* ---- Separator ---- */
 	auto add_separator = [&]() {

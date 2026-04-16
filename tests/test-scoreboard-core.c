@@ -787,6 +787,178 @@ static void test_period_format_beyond_labels(void)
 	assert(strcmp(buf, "X") == 0);
 }
 
+/* ---- game clock (cumulative) ---- */
+
+static void test_game_clock_disabled_by_default(void)
+{
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_get_game_clock_enabled());
+	assert(scoreboard_game_clock_get_tenths() == 0);
+}
+
+static void test_game_clock_not_started_returns_zero(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	assert(scoreboard_get_game_clock_enabled());
+	/* Clock not started — cumulative should be 0 even though
+	   clock_tenths is at period_length*10 (countdown default) */
+	assert(scoreboard_game_clock_get_tenths() == 0);
+}
+
+static void test_game_clock_countdown_basic(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	/* Default: countdown, 900s period, clock_tenths = 9000 */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(50); /* 5 seconds elapsed */
+	/* elapsed = 9000 - 8950 = 50 tenths */
+	assert(scoreboard_game_clock_get_tenths() == 50);
+}
+
+static void test_game_clock_countup_basic(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_clock_direction(SCOREBOARD_CLOCK_COUNT_UP);
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+	scoreboard_clock_tick(50);
+	/* count-up: elapsed = clock_tenths = 50 */
+	assert(scoreboard_game_clock_get_tenths() == 50);
+}
+
+static void test_game_clock_across_periods(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	/* Period 1: tick 100 tenths (10 seconds) */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(100);
+	/* Advance period — accumulates 100 tenths from period 1 */
+	scoreboard_period_advance();
+	assert(scoreboard_get_period() == 2);
+	/* Period 2: start and tick 200 tenths */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(200);
+	/* cumulative = 100 (accumulated) + 200 (current) = 300 */
+	assert(scoreboard_game_clock_get_tenths() == 300);
+
+	/* Advance again, run period 3 */
+	scoreboard_period_advance();
+	scoreboard_clock_start();
+	scoreboard_clock_tick(150);
+	/* cumulative = 100 + 200 (accumulated) + 150 (current) = 450 */
+	assert(scoreboard_game_clock_get_tenths() == 450);
+}
+
+static void test_game_clock_period_rewind(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	/* Complete period 1 fully */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(9000); /* full 900s period */
+	scoreboard_period_advance();
+	/* accumulated = 9000 tenths */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(100);
+	/* Now rewind — subtracts period_length*10 = 9000 from accumulated */
+	scoreboard_period_rewind();
+	/* accumulated was 9000, subtract 9000 = 0; clock reset to 9000 */
+	/* Current period elapsed = 9000 - 9000 = 0 */
+	assert(scoreboard_game_clock_get_tenths() == 0);
+
+	/* Test clamp to 0: partial period then rewind. accumulated=0
+	   but subtracting period_length*10 would go negative. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	scoreboard_clock_tick(100); /* only 10 sec of period 1 */
+	scoreboard_period_advance(); /* accumulated = 100 */
+	/* Now rewind: subtract 9000 from 100 → clamp to 0 */
+	scoreboard_period_rewind();
+	assert(scoreboard_game_clock_get_tenths() == 0);
+}
+
+static void test_game_clock_new_game_resets(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	scoreboard_clock_tick(500);
+	scoreboard_period_advance();
+	/* accumulated = 500 */
+	scoreboard_new_game();
+	/* accumulated and started reset, but enabled stays true */
+	assert(scoreboard_get_game_clock_enabled());
+	assert(scoreboard_game_clock_get_tenths() == 0);
+}
+
+static void test_game_clock_format(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	char buf[32];
+
+	/* 0:00 before start */
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "0:00") == 0);
+
+	/* Start and tick to 1:30 (900 tenths) */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(900);
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "1:30") == 0);
+
+	/* Advance period, tick to 62:00 total in a long game */
+	scoreboard_period_advance();
+	scoreboard_clock_start();
+	/* accumulated = 900 from period 1. Tick another 8100-900 = need
+	   total 62 minutes = 37200 tenths. accumulated = 900.
+	   Need current elapsed = 37200 - 900 = 36300 tenths.
+	   But period is 9000 tenths max (15 min). Let's test >60 min
+	   by doing multiple periods. */
+	/* Simpler: just test format with known accumulated value.
+	   Reset and set up directly. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	/* Tick 6000 tenths = 10 minutes */
+	scoreboard_clock_tick(6000);
+	scoreboard_period_advance(); /* accumulated = 6000 */
+	/* Do this 6 times for 60 minutes accumulated */
+	for (int i = 0; i < 5; i++) {
+		scoreboard_clock_start();
+		scoreboard_clock_tick(6000);
+		scoreboard_period_advance();
+	}
+	/* accumulated = 36000 (60 minutes) */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(1800); /* 3 more minutes */
+	/* total = 36000 + 1800 = 37800 tenths = 63 min */
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "63:00") == 0);
+}
+
+static void test_game_clock_format_null(void)
+{
+	/* Should not crash */
+	scoreboard_game_clock_format(NULL, 0);
+	char buf[4];
+	scoreboard_game_clock_format(buf, 0);
+}
+
+static void test_game_clock_format_disabled(void)
+{
+	scoreboard_reset_state_for_tests();
+	/* game_clock_enabled is false by default */
+	char buf[32];
+	scoreboard_game_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "0:00") == 0);
+}
+
 int main(void)
 {
 	test_description();
@@ -859,6 +1031,18 @@ int main(void)
 	test_period_labels_long_label_truncated();
 	test_get_period_labels_small_buffer();
 	test_period_format_beyond_labels();
+
+	/* Game clock (cumulative) tests */
+	test_game_clock_disabled_by_default();
+	test_game_clock_not_started_returns_zero();
+	test_game_clock_countdown_basic();
+	test_game_clock_countup_basic();
+	test_game_clock_across_periods();
+	test_game_clock_period_rewind();
+	test_game_clock_new_game_resets();
+	test_game_clock_format();
+	test_game_clock_format_null();
+	test_game_clock_format_disabled();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
 	return 0;

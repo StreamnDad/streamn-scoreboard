@@ -895,6 +895,7 @@ static void test_write_read_round_trip(void)
 	scoreboard_set_default_penalty_duration(90);
 	scoreboard_set_default_major_penalty_duration(450);
 	scoreboard_set_period_length(1200);
+	scoreboard_set_game_clock_enabled(true);
 
 	bool ok = scoreboard_write_all_files();
 	assert(ok);
@@ -1347,6 +1348,74 @@ static void test_load_old_json_no_phase2(void)
 	cleanup_tmp_dir();
 }
 
+static void test_game_clock_write_file(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	scoreboard_clock_tick(900); /* 90 seconds elapsed = 1:30 */
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/game_clock.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "1:30") == 0);
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_no_file_when_disabled(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	/* game_clock_enabled is false by default */
+	scoreboard_mark_dirty();
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/game_clock.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content == NULL); /* file should not exist */
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_save_load_state(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	scoreboard_clock_tick(500);
+	scoreboard_period_advance(); /* accumulated = 500 */
+
+	char save_path[512];
+	snprintf(save_path, sizeof(save_path), "%s/state.json", g_tmp_dir);
+	assert(scoreboard_save_state(save_path));
+
+	scoreboard_reset_state_for_tests();
+	assert(!scoreboard_get_game_clock_enabled());
+
+	assert(scoreboard_load_state(save_path));
+	assert(scoreboard_get_game_clock_enabled());
+	/* After load: accumulated=500, started=true, clock reset to period_length*10.
+	   Current elapsed = period_length*10 - clock_tenths = 0.
+	   Total = 500 + 0 = 500 */
+	assert(scoreboard_game_clock_get_tenths() == 500);
+
+	cleanup_tmp_dir();
+}
+
 int main(void)
 {
 	test_write_all_files();
@@ -1403,6 +1472,10 @@ int main(void)
 	test_read_all_files_preserves_compound();
 	test_save_load_compound_penalty();
 	test_load_old_json_no_phase2();
+
+	test_game_clock_write_file();
+	test_game_clock_no_file_when_disabled();
+	test_game_clock_save_load_state();
 
 	printf("All scoreboard-core persistence tests passed.\n");
 	return 0;
