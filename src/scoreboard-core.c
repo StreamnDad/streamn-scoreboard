@@ -531,14 +531,14 @@ int scoreboard_get_period_length(void)
 
 static int current_period_elapsed_tenths(void)
 {
-	int elapsed;
+	/* Derive elapsed from the displayed (truncated-to-seconds) period
+	   clock so that displayed_period + cumulative == period_length
+	   at every instant.  Without this, independent truncation of raw
+	   tenths causes a 1-second drift (GitHub #16). */
+	int displayed_seconds = g_state.clock_tenths / 10;
 	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN)
-		elapsed = g_state.period_length * 10 - g_state.clock_tenths;
-	else
-		elapsed = g_state.clock_tenths;
-	/* Truncate to whole seconds so cumulative clock matches the
-	   displayed period clock (both truncate tenths the same way). */
-	return (elapsed / 10) * 10;
+		return (g_state.period_length - displayed_seconds) * 10;
+	return displayed_seconds * 10;
 }
 
 void scoreboard_set_game_clock_enabled(bool enabled)
