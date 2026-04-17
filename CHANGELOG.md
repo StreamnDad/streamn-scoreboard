@@ -4,6 +4,18 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-17
+
+### Added
+- Strength display — writes current players-per-side to `strength.txt` (e.g. `5-4`) based on active penalties or red cards, updated on every penalty lifecycle event (#11)
+- Configurable "Players per side" in Game Settings — supports different game formats (5v5, 4v4, 3v3 hockey; 11v11, 7v7 soccer; etc.)
+- Sport-aware strength calculation — hockey/lacrosse/rugby use running penalties, soccer uses red cards (`fouls2`)
+- Strength label format template with `{{ home }}`, `{{ away }}`, and `{{ if_pp }}...{{ end_if }}` conditional, with live preview in Game Settings
+- Sport preset defaults for base strength: Hockey 5, Soccer 11, Lacrosse 5, Rugby 15
+
+### Changed
+- Game Settings dialog is now scrollable and resizable
+
 ## [0.7.1] - 2026-04-17
 
 ### Fixed
