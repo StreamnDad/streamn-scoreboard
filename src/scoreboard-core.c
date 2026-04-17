@@ -15,14 +15,14 @@
 #define SCOREBOARD_SEGMENT_NAME_SIZE 16
 
 static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COUNT] = {
-	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs */
-	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300},
-	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0},
-	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0},
-	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0},
-	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180},
-	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600},
-	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300},
+	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs, base_strength, min_strength */
+	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300, 5,  3},
+	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0,   0,  0},
+	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0,   11, 7},
+	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0},
+	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3},
+	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13},
+	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0},
 };
 
 static struct {
@@ -47,6 +47,8 @@ static struct {
 	int ot_max;
 	bool has_shots;
 	bool has_penalties;
+	int base_strength;
+	int min_strength;
 
 	char period_labels[SCOREBOARD_MAX_PERIOD_LABELS]
 			  [SCOREBOARD_PERIOD_LABEL_SIZE];
@@ -76,6 +78,7 @@ static struct {
 	struct scoreboard_penalty away_penalties[SCOREBOARD_PENALTY_SLOTS];
 
 	char penalty_label_format[SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE];
+	char strength_label_format[SCOREBOARD_STRENGTH_LABEL_FORMAT_SIZE];
 
 	char output_directory[SCOREBOARD_MAX_PATH];
 
@@ -94,6 +97,8 @@ static bool g_dirty;
 
 static const char *kDefaultPenaltyLabelFormat =
 	"#{{ number }}  {{ time }}{{ if_phase2 }} (+{{ phase2 }}){{ end_if }}";
+
+static const char *kDefaultStrengthLabelFormat = "{{ home }}-{{ away }}";
 
 /* ---- game event log ---- */
 static struct scoreboard_game_event
@@ -401,6 +406,8 @@ void scoreboard_reset_state_for_tests(void)
 	g_state.has_shots = true;
 	g_state.has_faceoffs = true;
 	g_state.has_penalties = true;
+	g_state.base_strength = 5;
+	g_state.min_strength = 3;
 	g_state.has_fouls = false;
 	g_state.foul_label[0] = '\0';
 	g_state.foul_label2[0] = '\0';
@@ -408,6 +415,8 @@ void scoreboard_reset_state_for_tests(void)
 	safe_copy(g_state.score_label, "Goal", sizeof(g_state.score_label));
 	safe_copy(g_state.penalty_label_format, kDefaultPenaltyLabelFormat,
 		  sizeof(g_state.penalty_label_format));
+	safe_copy(g_state.strength_label_format, kDefaultStrengthLabelFormat,
+		  sizeof(g_state.strength_label_format));
 	generate_default_period_labels();
 }
 
@@ -1817,6 +1826,13 @@ bool scoreboard_write_all_files(void)
 		ok = write_text_file(dir, "cumulative_clock.txt", gc_buf) && ok;
 	}
 
+	if (g_state.base_strength > 0) {
+		char strength_buf[SCOREBOARD_STRENGTH_LABEL_FORMAT_SIZE];
+		scoreboard_format_strength(strength_buf,
+					   sizeof(strength_buf));
+		ok = write_text_file(dir, "strength.txt", strength_buf) && ok;
+	}
+
 	g_dirty = false;
 	return ok;
 }
@@ -2007,6 +2023,9 @@ bool scoreboard_save_state(const char *path)
 	fprintf(f, "  \"away_fouls2\": %d,\n", g_state.away_fouls2);
 	write_json_string(f, "sport", scoreboard_sport_name(g_state.sport),
 			  false);
+	fprintf(f, "  \"base_strength\": %d,\n", g_state.base_strength);
+	write_json_string(f, "strength_label_format",
+			  g_state.strength_label_format, false);
 
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		fprintf(f, "  \"home_penalty%d_number\": %d,\n", i,
@@ -2129,6 +2148,11 @@ bool scoreboard_load_state(const char *path)
 		parse_json_int(json, "home_fouls2", g_state.home_fouls2);
 	g_state.away_fouls2 =
 		parse_json_int(json, "away_fouls2", g_state.away_fouls2);
+	g_state.base_strength =
+		parse_json_int(json, "base_strength", g_state.base_strength);
+	parse_json_string(json, "strength_label_format",
+			  g_state.strength_label_format,
+			  sizeof(g_state.strength_label_format));
 
 	for (int i = 0; i < SCOREBOARD_PENALTY_SLOTS; i++) {
 		char key[64];
@@ -2279,6 +2303,8 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 	if (p->default_major_penalty_secs > 0)
 		g_state.default_major_penalty_duration =
 			p->default_major_penalty_secs;
+	g_state.base_strength = p->base_strength;
+	g_state.min_strength = p->min_strength;
 	generate_default_period_labels();
 	mark_dirty();
 }
@@ -2354,6 +2380,191 @@ bool scoreboard_get_log_scores(void)
 const char *scoreboard_get_score_label(void)
 {
 	return g_state.score_label;
+}
+
+/* ---- strength (players per side) ---- */
+
+void scoreboard_set_base_strength(int value)
+{
+	if (value < 0)
+		value = 0;
+	g_state.base_strength = value;
+	mark_dirty();
+}
+
+int scoreboard_get_base_strength(void)
+{
+	return g_state.base_strength;
+}
+
+int scoreboard_get_min_strength(void)
+{
+	return g_state.min_strength;
+}
+
+static int compute_strength(int penalty_count, int fouls2)
+{
+	if (g_state.base_strength == 0)
+		return 0;
+	int reduction;
+	if (g_state.sport == SCOREBOARD_SPORT_SOCCER)
+		reduction = fouls2;
+	else
+		reduction = penalty_count < SCOREBOARD_MAX_RUNNING_PENALTIES
+				    ? penalty_count
+				    : SCOREBOARD_MAX_RUNNING_PENALTIES;
+	int strength = g_state.base_strength - reduction;
+	if (strength < g_state.min_strength)
+		strength = g_state.min_strength;
+	return strength;
+}
+
+int scoreboard_get_home_strength(void)
+{
+	return compute_strength(scoreboard_get_home_penalty_count(),
+				g_state.home_fouls2);
+}
+
+int scoreboard_get_away_strength(void)
+{
+	return compute_strength(scoreboard_get_away_penalty_count(),
+				g_state.away_fouls2);
+}
+
+void scoreboard_set_strength_label_format(const char *fmt)
+{
+	safe_copy(g_state.strength_label_format, fmt,
+		  sizeof(g_state.strength_label_format));
+	mark_dirty();
+}
+
+const char *scoreboard_get_strength_label_format(void)
+{
+	if (g_state.strength_label_format[0] == '\0')
+		return kDefaultStrengthLabelFormat;
+	return g_state.strength_label_format;
+}
+
+static size_t expand_strength_format(const char *fmt, const char *home_str,
+				     const char *away_str, bool is_pp,
+				     char *buf, size_t size)
+{
+	size_t out = 0;
+	const char *p = fmt;
+	while (*p != '\0' && out < size - 1) {
+		if (p[0] == '{' && p[1] == '{') {
+			const char *end = strstr(p + 2, "}}");
+			if (end == NULL)
+				break;
+			const char *vs = p + 2;
+			while (vs < end && *vs == ' ')
+				vs++;
+			const char *ve = end;
+			while (ve > vs && *(ve - 1) == ' ')
+				ve--;
+			size_t nlen = (size_t)(ve - vs);
+			if (nlen == 5 && strncmp(vs, "if_pp", 5) == 0) {
+				p = end + 2;
+				if (!is_pp) {
+					const char *skip = p;
+					while (*skip != '\0') {
+						if (skip[0] == '{' &&
+						    skip[1] == '{') {
+							const char *se =
+								strstr(skip + 2,
+								       "}}");
+							if (se != NULL) {
+								const char *ts =
+									skip +
+									2;
+								while (ts <
+									       se &&
+								       *ts ==
+									       ' ')
+									ts++;
+								const char *te =
+									se;
+								while (te >
+									       ts &&
+								       *(te - 1) ==
+									       ' ')
+									te--;
+								if ((size_t)(
+									    te -
+									    ts) ==
+									    6 &&
+								    strncmp(ts,
+									    "end_if",
+									    6) ==
+									    0) {
+									p = se +
+									    2;
+									break;
+								}
+							}
+						}
+						skip++;
+					}
+					if (*skip == '\0')
+						p = skip;
+				}
+				continue;
+			}
+			if (nlen == 6 && strncmp(vs, "end_if", 6) == 0) {
+				p = end + 2;
+				continue;
+			}
+			const char *val = "";
+			if (nlen == 4 && strncmp(vs, "home", 4) == 0)
+				val = home_str;
+			else if (nlen == 4 && strncmp(vs, "away", 4) == 0)
+				val = away_str;
+			size_t vlen = strlen(val);
+			memcpy(buf + out, val, vlen);
+			out += vlen;
+			p = end + 2;
+		} else {
+			buf[out++] = *p++;
+		}
+	}
+	while (*p != '\0' && out < size - 1)
+		buf[out++] = *p++;
+	buf[out] = '\0';
+	return out;
+}
+
+void scoreboard_format_strength(char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	if (g_state.base_strength == 0) {
+		buf[0] = '\0';
+		return;
+	}
+	int home = scoreboard_get_home_strength();
+	int away = scoreboard_get_away_strength();
+	char home_str[8];
+	char away_str[8];
+	snprintf(home_str, sizeof(home_str), "%d", home);
+	snprintf(away_str, sizeof(away_str), "%d", away);
+	expand_strength_format(scoreboard_get_strength_label_format(),
+			       home_str, away_str, home != away, buf, size);
+}
+
+void scoreboard_preview_strength_label(const char *fmt, char *buf, size_t size)
+{
+	if (buf == NULL || size == 0)
+		return;
+	if (fmt == NULL || fmt[0] == '\0')
+		fmt = kDefaultStrengthLabelFormat;
+
+	char even[SCOREBOARD_STRENGTH_LABEL_FORMAT_SIZE];
+	expand_strength_format(fmt, "5", "5", false, even, sizeof(even));
+
+	char pp[SCOREBOARD_STRENGTH_LABEL_FORMAT_SIZE];
+	expand_strength_format(fmt, "5", "4", true, pp, sizeof(pp));
+
+	snprintf(buf, size, "Even: %s\nPP:   %s", even, pp);
 }
 
 /* ---- action log ---- */

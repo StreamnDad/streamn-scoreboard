@@ -55,6 +55,8 @@ struct scoreboard_sport_preset {
 	char score_label[16];
 	int default_penalty_secs;
 	int default_major_penalty_secs;
+	int base_strength;
+	int min_strength;
 };
 
 struct scoreboard_penalty {
@@ -180,6 +182,7 @@ void scoreboard_decrement_away_fouls2(void);
 #define SCOREBOARD_MAX_PERIOD_LABELS 16
 #define SCOREBOARD_PERIOD_LABEL_SIZE 16
 #define SCOREBOARD_PENALTY_LABEL_FORMAT_SIZE 128
+#define SCOREBOARD_STRENGTH_LABEL_FORMAT_SIZE 128
 
 /* Penalties (up to SCOREBOARD_MAX_PENALTIES per team) */
 int scoreboard_home_penalty_add(int player_number, int duration_secs);
@@ -250,6 +253,18 @@ bool scoreboard_get_has_fouls2(void);
 const char *scoreboard_get_foul_label2(void);
 bool scoreboard_get_log_scores(void);
 const char *scoreboard_get_score_label(void);
+
+/* Strength (players per side) */
+void scoreboard_set_base_strength(int value);
+int scoreboard_get_base_strength(void);
+int scoreboard_get_min_strength(void);
+int scoreboard_get_home_strength(void);
+int scoreboard_get_away_strength(void);
+void scoreboard_set_strength_label_format(const char *fmt);
+const char *scoreboard_get_strength_label_format(void);
+void scoreboard_format_strength(char *buf, size_t size);
+void scoreboard_preview_strength_label(const char *fmt, char *buf,
+				       size_t size);
 
 /* Action log */
 void scoreboard_add_action_log(const char *message);

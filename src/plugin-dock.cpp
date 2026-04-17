@@ -1551,7 +1551,19 @@ void open_clock_settings_dialog(QWidget *parent)
 {
 	QDialog dialog(parent);
 	dialog.setWindowTitle("Game Settings");
-	QVBoxLayout *layout = new QVBoxLayout(&dialog);
+	dialog.resize(420, 500);
+
+	QVBoxLayout *dialog_layout = new QVBoxLayout(&dialog);
+
+	QWidget *content_widget = new QWidget(&dialog);
+	QVBoxLayout *layout = new QVBoxLayout(content_widget);
+	layout->setContentsMargins(0, 0, 0, 0);
+
+	QScrollArea *scroll = new QScrollArea(&dialog);
+	scroll->setWidget(content_widget);
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	dialog_layout->addWidget(scroll, 1);
 
 	/* Sport selector */
 	QHBoxLayout *sport_row = new QHBoxLayout();
@@ -1566,6 +1578,19 @@ void open_clock_settings_dialog(QWidget *parent)
 	sport_combo->setCurrentIndex((int)scoreboard_get_sport());
 	sport_row->addWidget(sport_combo, 1);
 	layout->addLayout(sport_row);
+
+	QLabel *strength_label =
+		new QLabel("Players per side:", &dialog);
+	QHBoxLayout *strength_row = new QHBoxLayout();
+	strength_row->addWidget(strength_label);
+	QSpinBox *strength_spin = new QSpinBox(&dialog);
+	strength_spin->setRange(0, 30);
+	strength_spin->setValue(scoreboard_get_base_strength());
+	strength_row->addWidget(strength_spin);
+	layout->addLayout(strength_row);
+	bool strength_visible = scoreboard_get_base_strength() > 0;
+	strength_label->setVisible(strength_visible);
+	strength_spin->setVisible(strength_visible);
 
 	QLabel *len_label = new QLabel("Segment length (minutes):", &dialog);
 	QHBoxLayout *len_row = new QHBoxLayout();
@@ -1669,21 +1694,70 @@ void open_clock_settings_dialog(QWidget *parent)
 	QObject::connect(pen_label_input, &QLineEdit::textChanged,
 			 [update_pen_preview]() { update_pen_preview(); });
 
+	QLabel *str_label_header =
+		new QLabel("<b>Custom Strength Label</b>", &dialog);
+	layout->addWidget(str_label_header);
+
+	QHBoxLayout *str_label_row = new QHBoxLayout();
+	QLabel *str_label_label = new QLabel("Format:", &dialog);
+	str_label_row->addWidget(str_label_label);
+	QLineEdit *str_label_input = new QLineEdit(&dialog);
+	str_label_input->setText(QString::fromUtf8(
+		scoreboard_get_strength_label_format()));
+	str_label_input->setPlaceholderText("{{ home }}-{{ away }}");
+	str_label_input->setToolTip(
+		"Format for strength.txt output.\n\n"
+		"Variables:\n"
+		"  {{ home }} \xe2\x80\x94 home team strength\n"
+		"  {{ away }} \xe2\x80\x94 away team strength\n\n"
+		"Conditional (power play only):\n"
+		"  {{ if_pp }}...{{ end_if }}\n\n"
+		"Examples:\n"
+		"  {{ home }}v{{ away }} \xe2\x86\x92 5v4\n"
+		"  {{ home }} on {{ away }} \xe2\x86\x92 5 on 4");
+	str_label_row->addWidget(str_label_input, 1);
+	layout->addLayout(str_label_row);
+
+	QLabel *str_preview_label = new QLabel(&dialog);
+	str_preview_label->setStyleSheet(
+		"font-size: 11px; color: gray; padding-left: 4px;");
+	str_preview_label->setWordWrap(true);
+	layout->addWidget(str_preview_label);
+
+	auto update_str_preview = [str_preview_label,
+				   str_label_input]() {
+		char buf[512];
+		scoreboard_preview_strength_label(
+			str_label_input->text().toUtf8().constData(), buf,
+			sizeof(buf));
+		str_preview_label->setText(QString::fromUtf8(buf));
+	};
+	update_str_preview();
+	QObject::connect(str_label_input, &QLineEdit::textChanged,
+			 [update_str_preview]() { update_str_preview(); });
+
+	bool str_section_visible = scoreboard_get_base_strength() > 0;
+	str_label_header->setVisible(str_section_visible);
+	str_label_label->setVisible(str_section_visible);
+	str_label_input->setVisible(str_section_visible);
+	str_preview_label->setVisible(str_section_visible);
+
 	/* Preset duration/direction/features per sport (mirrors core table) */
 	struct sport_ui_info {
 		int duration_min;
 		bool count_down;
 		bool has_penalties;
 		bool has_fouls;
+		int base_strength;
 	};
 	static const sport_ui_info k_sport_ui[SCOREBOARD_SPORT_COUNT] = {
-		{15, true, true, false},   /* hockey */
-		{8, true, false, true},    /* basketball */
-		{45, false, false, true},  /* soccer */
-		{30, true, false, true},   /* football */
-		{12, true, true, false},   /* lacrosse */
-		{40, false, true, false},  /* rugby */
-		{0, false, false, false},  /* generic */
+		{15, true, true, false, 5},    /* hockey */
+		{8, true, false, true, 0},     /* basketball */
+		{45, false, false, true, 11},  /* soccer */
+		{30, true, false, true, 0},    /* football */
+		{12, true, true, false, 5},    /* lacrosse */
+		{40, false, true, false, 15},  /* rugby */
+		{0, false, false, false, 0},   /* generic */
 	};
 
 	/* Update dialog fields when sport changes */
@@ -1692,7 +1766,9 @@ void open_clock_settings_dialog(QWidget *parent)
 		[len_spin, down_btn, up_btn, pen_dur_spin, pen_dur_label,
 		 major_pen_dur_spin, major_pen_dur_label, pen_label_header,
 		 pen_label_label, pen_label_input,
-		 pen_preview_label](int index) {
+		 pen_preview_label, strength_spin, strength_label,
+		 str_label_header, str_label_label, str_label_input,
+		 str_preview_label](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
 			const sport_ui_info &info = k_sport_ui[index];
@@ -1713,6 +1789,15 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_label_label->setVisible(info.has_penalties);
 			pen_label_input->setVisible(info.has_penalties);
 			pen_preview_label->setVisible(info.has_penalties);
+			bool show_strength = info.base_strength > 0;
+			strength_label->setVisible(show_strength);
+			strength_spin->setVisible(show_strength);
+			str_label_header->setVisible(show_strength);
+			str_label_label->setVisible(show_strength);
+			str_label_input->setVisible(show_strength);
+			str_preview_label->setVisible(show_strength);
+			if (show_strength)
+				strength_spin->setValue(info.base_strength);
 		});
 
 	/* Period labels button */
@@ -1866,7 +1951,7 @@ void open_clock_settings_dialog(QWidget *parent)
 			 &QDialog::accept);
 	QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
 			 &QDialog::reject);
-	layout->addWidget(buttons);
+	dialog_layout->addWidget(buttons);
 
 	/* Capture pre-dialog clock settings to detect changes */
 	int prev_period_length = scoreboard_get_period_length();
@@ -1887,8 +1972,11 @@ void open_clock_settings_dialog(QWidget *parent)
 			pen_dur_spin->value());
 		scoreboard_set_default_major_penalty_duration(
 			major_pen_dur_spin->value());
+		scoreboard_set_base_strength(strength_spin->value());
 		scoreboard_set_penalty_label_format(
 			pen_label_input->text().toUtf8().constData());
+		scoreboard_set_strength_label_format(
+			str_label_input->text().toUtf8().constData());
 		scoreboard_set_cli_executable(
 			cli_input->text().trimmed().toUtf8().constData());
 		scoreboard_set_cli_extra_args(
