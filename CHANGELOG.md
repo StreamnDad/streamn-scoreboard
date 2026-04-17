@@ -7,7 +7,8 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 ## [0.7.1] - 2026-04-17
 
 ### Fixed
-- Cumulative game clock no longer drifts 1 second from the period clock — both clocks now truncate sub-second time consistently, so they always agree (#16)
+- Cumulative game clock no longer drifts 1 second from the period clock — elapsed time is now derived from the displayed period clock, guaranteeing they always sum to the period length (#16)
+- Cumulative game clock now persists across OBS restarts — previously reset to 0:00 every time OBS reopened
 
 ## [0.7.0] - 2026-04-14
 
