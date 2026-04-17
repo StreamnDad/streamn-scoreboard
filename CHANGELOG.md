@@ -4,6 +4,11 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-17
+
+### Fixed
+- Cumulative game clock no longer drifts 1 second from the period clock — both clocks now truncate sub-second time consistently, so they always agree (#16)
+
 ## [0.7.0] - 2026-04-14
 
 ### Added

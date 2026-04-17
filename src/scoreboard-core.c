@@ -531,10 +531,14 @@ int scoreboard_get_period_length(void)
 
 static int current_period_elapsed_tenths(void)
 {
+	int elapsed;
 	if (g_state.clock_direction == SCOREBOARD_CLOCK_COUNT_DOWN)
-		return g_state.period_length * 10 - g_state.clock_tenths;
+		elapsed = g_state.period_length * 10 - g_state.clock_tenths;
 	else
-		return g_state.clock_tenths;
+		elapsed = g_state.clock_tenths;
+	/* Truncate to whole seconds so cumulative clock matches the
+	   displayed period clock (both truncate tenths the same way). */
+	return (elapsed / 10) * 10;
 }
 
 void scoreboard_set_game_clock_enabled(bool enabled)

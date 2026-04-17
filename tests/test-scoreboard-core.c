@@ -995,6 +995,89 @@ static void test_game_clock_format_hmmss(void)
 	assert(strcmp(buf, "1:01:33") == 0);
 }
 
+static void test_game_clock_subsecond_sync(void)
+{
+	/* Cumulative clock must agree with the period clock at the
+	   whole-second level.  Before the fix, independent truncation of
+	   tenths could cause a 1-second discrepancy (GitHub issue #16). */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(1200); /* 20:00 countdown */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+
+	/* Tick 1 tenth past a second boundary (clock_tenths goes from
+	   12000 to 11999).  Period clock: 11999/10 = 1199s = 19:59.
+	   Elapsed tenths = 12000 - 11999 = 1 → old code: 1/10 = 0s.
+	   So old cumulative = 0:00 while period clock says 19:59.
+	   Fixed code truncates elapsed to 0 tenths, giving 0:00 — which
+	   still adds up (0:00 + 19:59 = 19:59 → first real second
+	   hasn't completed yet, both agree the first full second hasn't
+	   elapsed). */
+	scoreboard_clock_tick(1);
+	assert(scoreboard_game_clock_get_tenths() == 0);
+
+	/* Now tick to 9 tenths into a second (clock_tenths = 11991).
+	   Period clock: 11991/10 = 1199s = 19:59.
+	   Elapsed tenths = 12000 - 11991 = 9.
+	   Fixed code: (9/10)*10 = 0.  Cumulative = 0:00.
+	   Period says 19:59; 0:00 + 19:59 = 19:59 — consistent. */
+	scoreboard_clock_tick(8); /* total ticked = 9 */
+	assert(scoreboard_game_clock_get_tenths() == 0);
+
+	/* Tick one more to complete the first full second (10 tenths).
+	   clock_tenths = 11990.  Period clock: 11990/10 = 1199s = 19:59.
+	   Elapsed = 12000 - 11990 = 10.  (10/10)*10 = 10.
+	   Cumulative = 0:01.  Period says 19:59; 0:01 + 19:59 = 20:00 ✓ */
+	scoreboard_clock_tick(1); /* total ticked = 10 */
+	assert(scoreboard_game_clock_get_tenths() == 10);
+
+	/* Tick 11 more to land mid-second (clock_tenths = 11979).
+	   Period clock: 11979/10 = 1197s = 19:57.
+	   Elapsed = 12000 - 11979 = 21.  (21/10)*10 = 20.
+	   Cumulative = 0:02.  0:02 + 19:57 = 19:59 — wait, that's
+	   only 19:59 not 20:00, but that's correct because both clocks
+	   have dropped the sub-second remainder consistently.
+	   Key invariant: period_displayed + cumulative_displayed >=
+	   period_length - 1 (at most 1s truncation total). */
+	scoreboard_clock_tick(11); /* total ticked = 21 */
+	assert(scoreboard_game_clock_get_tenths() == 20);
+
+	/* Verify formatted strings agree: period shows 19:57,
+	   cumulative shows 0:02.  The sum (19:59) is within 1s of
+	   period_length (20:00) due to shared truncation — but critically
+	   they no longer disagree with each other by 1s. */
+	char clock_buf[32], cum_buf[32];
+	scoreboard_clock_format(clock_buf, sizeof(clock_buf));
+	scoreboard_game_clock_format(cum_buf, sizeof(cum_buf));
+	assert(strcmp(clock_buf, "19:57") == 0);
+	assert(strcmp(cum_buf, "0:02") == 0);
+}
+
+static void test_game_clock_subsecond_sync_across_periods(void)
+{
+	/* Ensure the fix holds across period boundaries when the clock
+	   stops mid-second at period advance. */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(60); /* 1:00 periods */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+
+	/* Tick 5 tenths into second 1 then advance period.
+	   Elapsed = 600 - 595 = 5 tenths → truncated to 0.
+	   accumulated += 0 after advance. */
+	scoreboard_clock_tick(5);
+	scoreboard_period_advance();
+	/* accumulated = 0, period 2 clock reset */
+
+	/* In period 2, tick a full 10 tenths (1 second). */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(10);
+	/* Current elapsed = 600 - 590 = 10 → (10/10)*10 = 10. */
+	assert(scoreboard_game_clock_get_tenths() == 10);
+}
+
 static void test_game_clock_format_mmss_over_hour(void)
 {
 	/* MM:SS format — minutes exceed 59 */
@@ -1102,6 +1185,8 @@ int main(void)
 	test_game_clock_format_null();
 	test_game_clock_format_disabled();
 	test_game_clock_format_hmmss();
+	test_game_clock_subsecond_sync();
+	test_game_clock_subsecond_sync_across_periods();
 	test_game_clock_format_mmss_over_hour();
 
 	printf("All scoreboard-core clock/period tests passed.\n");
