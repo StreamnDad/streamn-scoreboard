@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions & Help
+    url: https://github.com/StreamnDad/streamn-scoreboard/discussions/categories/q-a
+    about: Ask the community for help with setup, configuration, or usage.
+  - name: Show Your Setup
+    url: https://github.com/StreamnDad/streamn-scoreboard/discussions/categories/show-and-tell
+    about: Share screenshots or videos of your scoreboard overlay in action!

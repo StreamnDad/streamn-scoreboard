@@ -1,0 +1,44 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What would you like to see?
+      description: Describe the feature or enhancement you have in mind.
+      placeholder: "e.g., Support for tracking overtime periods"
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Why is this useful?
+      description: How would this help your streaming or scorekeeping workflow?
+      placeholder: "e.g., Our league plays 5-minute sudden death OT and I currently have to..."
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Have you found a workaround, or are there other tools that do this?
+
+  - type: dropdown
+    id: sport
+    attributes:
+      label: Sport
+      description: Which sport is this most relevant to?
+      options:
+        - Hockey
+        - Soccer
+        - Lacrosse
+        - Basketball
+        - Football
+        - Rugby
+        - Other / All sports
