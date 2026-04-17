@@ -1422,6 +1422,226 @@ static void test_game_clock_save_load_state(void)
 	cleanup_tmp_dir();
 }
 
+static void test_game_clock_read_all_files(void)
+{
+	/* Simulate OBS restart: write files, reset state, then read them
+	   back.  The cumulative clock should be restored. */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900); /* 15:00 period */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+	scoreboard_clock_tick(900); /* 90 seconds elapsed → clock at 13:30 */
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	/* Verify written cumulative_clock.txt is 1:30 */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "1:30") == 0);
+	free(content);
+
+	/* Reset state (simulates OBS restart calling
+	   scoreboard_reset_state_for_tests + scoreboard_read_all_files) */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900);
+	scoreboard_clock_reset();
+	ok = scoreboard_read_all_files();
+	assert(ok);
+
+	/* Cumulative should be restored: 1:30 = 900 tenths */
+	assert(scoreboard_game_clock_get_tenths() == 900);
+	char gc_buf[32];
+	scoreboard_game_clock_format(gc_buf, sizeof(gc_buf));
+	assert(strcmp(gc_buf, "1:30") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_read_all_files_across_periods(void)
+{
+	/* Multi-period cumulative clock should survive a restart. */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(600); /* 10:00 periods */
+	scoreboard_clock_reset();
+
+	/* Period 1: full 10 minutes */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(6000);
+	scoreboard_period_advance();
+	/* Period 2: 3 minutes elapsed (clock at 7:00) */
+	scoreboard_clock_start();
+	scoreboard_clock_tick(1800);
+
+	/* Cumulative should be 13:00 = 7800 tenths */
+	assert(scoreboard_game_clock_get_tenths() == 7800);
+
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	/* Reset and reload */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(600);
+	scoreboard_clock_reset();
+	ok = scoreboard_read_all_files();
+	assert(ok);
+
+	assert(scoreboard_game_clock_get_tenths() == 7800);
+	char gc_buf[32];
+	scoreboard_game_clock_format(gc_buf, sizeof(gc_buf));
+	assert(strcmp(gc_buf, "13:00") == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_read_disabled_no_restore(void)
+{
+	/* When game clock is disabled, cumulative_clock.txt should be
+	   ignored even if the file exists. */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_start();
+	scoreboard_clock_tick(500);
+	scoreboard_write_all_files();
+
+	/* Reload with game clock disabled */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	/* game_clock_enabled defaults to false */
+	scoreboard_clock_reset();
+	scoreboard_read_all_files();
+
+	assert(scoreboard_game_clock_get_tenths() == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_read_hmmss_format(void)
+{
+	/* cumulative_clock.txt with H:MM:SS format should parse correctly */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900);
+	scoreboard_clock_reset();
+
+	/* Write all mandatory files so read_all_files succeeds */
+	scoreboard_mark_dirty();
+	bool ok = scoreboard_write_all_files();
+	assert(ok);
+
+	/* Overwrite cumulative_clock.txt with H:MM:SS format */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "1:05:30");
+	fclose(f);
+
+	/* Reset and reload */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900);
+	scoreboard_clock_reset();
+	ok = scoreboard_read_all_files();
+	assert(ok);
+
+	/* 1:05:30 = 3930 seconds = 39300 tenths.
+	   Clock is at 15:00 (full period), so current elapsed = 0.
+	   accumulated should be 39300. */
+	assert(scoreboard_game_clock_get_tenths() == 39300);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_read_invalid_format(void)
+{
+	/* Unparseable cumulative_clock.txt should be silently ignored. */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_reset();
+	scoreboard_mark_dirty();
+	scoreboard_write_all_files();
+
+	/* Overwrite with garbage */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "not-a-time");
+	fclose(f);
+
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_clock_reset();
+	scoreboard_read_all_files();
+
+	/* Should remain at 0 since the file was unparseable */
+	assert(scoreboard_game_clock_get_tenths() == 0);
+
+	cleanup_tmp_dir();
+}
+
+static void test_game_clock_read_clamps_negative(void)
+{
+	/* If cumulative_clock.txt has a value smaller than the current
+	   period elapsed, accumulated should clamp to 0. */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900); /* 15:00 */
+	scoreboard_clock_reset();
+	scoreboard_clock_start();
+	scoreboard_clock_tick(3000); /* 5 minutes elapsed, clock at 10:00 */
+	scoreboard_mark_dirty();
+	scoreboard_write_all_files();
+
+	/* Overwrite cumulative_clock.txt with a value less than
+	   the current-period elapsed (5:00 → 3000 tenths) */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/cumulative_clock.txt", g_tmp_dir);
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fprintf(f, "0:30"); /* 30 seconds < 5 minutes elapsed */
+	fclose(f);
+
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_game_clock_enabled(true);
+	scoreboard_set_period_length(900);
+	scoreboard_clock_reset();
+	scoreboard_read_all_files();
+
+	/* accumulated would be 300 - 3000 = -2700 → clamped to 0.
+	   get_tenths = 0 + current_elapsed (3000) = 3000.
+	   But wait — clock.txt was written as 10:00 so clock_tenths
+	   should be 6000. current_elapsed = (900 - 600)*10 = 3000. */
+	int tenths = scoreboard_game_clock_get_tenths();
+	assert(tenths == 3000);
+
+	cleanup_tmp_dir();
+}
+
 static void test_penalty_labels_write_files(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1551,6 +1771,12 @@ int main(void)
 	test_game_clock_write_file();
 	test_game_clock_no_file_when_disabled();
 	test_game_clock_save_load_state();
+	test_game_clock_read_all_files();
+	test_game_clock_read_all_files_across_periods();
+	test_game_clock_read_disabled_no_restore();
+	test_game_clock_read_hmmss_format();
+	test_game_clock_read_invalid_format();
+	test_game_clock_read_clamps_negative();
 
 	test_penalty_labels_write_files();
 	test_penalty_labels_write_empty();

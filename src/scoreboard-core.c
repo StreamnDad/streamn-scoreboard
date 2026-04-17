@@ -165,6 +165,16 @@ static int parse_clock_text(const char *text)
 	return -1;
 }
 
+static int parse_cumulative_clock_text(const char *text)
+{
+	int a = 0, b = 0, c = 0;
+	if (sscanf(text, "%d:%d:%d", &a, &b, &c) == 3)
+		return (a * 3600 + b * 60 + c) * 10; /* H:MM:SS */
+	if (sscanf(text, "%d:%d", &a, &b) == 2)
+		return (a * 60 + b) * 10; /* M:SS */
+	return -1;
+}
+
 static int parse_period_text(const char *text)
 {
 	/* Search labels array for an exact match */
@@ -1931,6 +1941,22 @@ bool scoreboard_read_all_files(void)
 		int val = atoi(buf);
 		if (val > 0)
 			g_state.period_length = val;
+	}
+
+	/* Cumulative clock file is optional — restores game clock state.
+	   Must come after clock.txt and period_length.txt since we need
+	   those to compute current-period elapsed and subtract it. */
+	if (g_state.game_clock_enabled &&
+	    read_text_file(dir, "cumulative_clock.txt", buf, sizeof(buf))) {
+		int total_tenths = parse_cumulative_clock_text(buf);
+		if (total_tenths >= 0) {
+			int current_elapsed = current_period_elapsed_tenths();
+			int accumulated = total_tenths - current_elapsed;
+			if (accumulated < 0)
+				accumulated = 0;
+			g_state.game_clock_accumulated_tenths = accumulated;
+			g_state.game_clock_started = true;
+		}
 	}
 
 	g_dirty = false;
