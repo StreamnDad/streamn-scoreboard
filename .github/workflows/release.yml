@@ -11,14 +11,16 @@ jobs:
   build-macos:
     name: Package (macOS)
     runs-on: macos-14
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       - name: Install dependencies
         run: brew install cmake simde
 
       - name: Install Qt 6.8.3
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005  # v4.3.0
         with:
           version: '6.8.3'
 
@@ -161,7 +163,7 @@ jobs:
             "streamn-obs-scoreboard-${VERSION}-macos.pkg"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-macos
           path: streamn-obs-scoreboard-*-macos.pkg
@@ -169,8 +171,10 @@ jobs:
   build-linux:
     name: Package (Linux)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       - name: Install dependencies
         run: |
@@ -245,24 +249,26 @@ jobs:
             -C /tmp/tar-root streamn-obs-scoreboard
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-linux
           path: streamn-obs-scoreboard-*-linux-x86_64.tar.gz
 
   build-windows:
     name: Package (Windows)
-    runs-on: windows-latest
+    runs-on: windows-2022
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
         with:
           arch: x64
 
       - name: Install Qt 6.8.3
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@d325aaf2a8baeeda41ad0b5d39f84a6af9bcf005  # v4.3.0
         with:
           version: '6.8.3'
 
@@ -350,7 +356,7 @@ jobs:
             -DestinationPath "streamn-obs-scoreboard-${version}-windows-x64.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: release-windows
           path: streamn-obs-scoreboard-*-windows-x64.zip
@@ -359,9 +365,11 @@ jobs:
     name: Create Release
     needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           path: artifacts
           pattern: release-*
@@ -374,7 +382,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090  # v2.4.1
         with:
           draft: true
           generate_release_notes: true
