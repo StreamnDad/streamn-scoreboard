@@ -20,7 +20,7 @@ jobs:
             preset: linux
           - os: macos-14
             preset: default
-          - os: windows-latest
+          - os: windows-2022
             preset: windows
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
@@ -179,7 +179,7 @@ jobs:
 
   build-windows:
     name: Build (Windows)
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: read
     steps:

@@ -256,7 +256,7 @@ jobs:
 
   build-windows:
     name: Package (Windows)
-    runs-on: windows-latest
+    runs-on: windows-2022
     permissions:
       contents: read
     steps:
