@@ -4,7 +4,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/StreamnDad/streamn-scoreboard/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
-OBS Studio plugin that tracks live game scoreboard state and writes it to individual text files. Supports hockey, basketball, soccer, football, lacrosse, rugby, and a generic preset. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
+OBS Studio plugin that tracks live game scoreboard state and writes it to individual text files. Supports hockey, basketball, soccer, futsal, football, lacrosse, rugby, and a generic preset. Users compose their scoreboard overlay in OBS using standard Text (GDI+/FreeType) sources pointed at these files.
 
 <p align="center">
   <img src="images/streamn-scoreboard.png" alt="Streamn Scoreboard dock UI" width="360">
@@ -12,12 +12,12 @@ OBS Studio plugin that tracks live game scoreboard state and writes it to indivi
 
 ## Features
 
-- **7 sport presets** — hockey, basketball, soccer, football, lacrosse, rugby, and generic
+- **8 sport presets** — hockey, basketball, soccer, futsal, football, lacrosse, rugby, and generic
 - **27 text files** updated in real-time: clock, period, scores, shots, team names, penalties, penalty labels, fouls, sport, and more
 - **Dock UI** with full scoreboard controls in an OBS dock panel
 - **45 OBS hotkeys** for hands-free operation during broadcasts
 - **Penalty tracking** with automatic countdown timers, compound penalties (2+2, 2+5, 2+10), edit/clear per slot (hockey, lacrosse, rugby)
-- **Foul/card counters** for basketball, soccer, and football
+- **Foul/card counters** for basketball, soccer, futsal, and football
 - **reeln-cli integration** for automated highlight generation
 - **Game event timestamps** — YouTube chapter markers copied to clipboard for livestream descriptions
 - **Recording chapter markers** — game events written to a `.chapters.txt` companion file next to each recording; also embedded directly into Hybrid MP4/MOV recordings on OBS 32+
@@ -145,7 +145,7 @@ Set an output directory in the dock settings. The plugin writes these files on e
 | `default_penalty_duration.txt` | Minor penalty duration (seconds) | `120` |
 | `default_major_penalty_duration.txt` | Major penalty duration (seconds) | `300` |
 
-Not all files are relevant for every sport — shots are only tracked for hockey and lacrosse, penalties for hockey/lacrosse/rugby, and fouls for basketball/soccer/football. Files for inactive features still exist but won't change.
+Not all files are relevant for every sport — shots are only tracked for hockey and lacrosse, penalties for hockey/lacrosse/rugby, and fouls for basketball/soccer/futsal/football. Files for inactive features still exist but won't change.
 
 ## Hotkeys
 
@@ -206,6 +206,7 @@ Score events use sport-specific labels:
 |-------|-------|-------------------|
 | Hockey | Goal | Yes |
 | Soccer | Goal | Yes |
+| Futsal | Goal | Yes |
 | Lacrosse | Goal | Yes |
 | Rugby | Try | Yes |
 | Basketball | Score | No (too frequent) |

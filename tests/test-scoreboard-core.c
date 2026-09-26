@@ -157,6 +157,34 @@ static void test_clock_format(void)
 	assert(strcmp(buf, "0:00") == 0);
 }
 
+static void test_clock_format_pad_minutes(void)
+{
+	scoreboard_reset_state_for_tests();
+	char buf[16];
+	/* Default: no leading zero */
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	scoreboard_clock_set_tenths(5400); /* 9:00 */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+
+	scoreboard_set_clock_pad_minutes(true);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+	assert(scoreboard_is_dirty());
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:00") == 0);
+	scoreboard_clock_set_tenths(50); /* 0:05 */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "00:05") == 0);
+	scoreboard_clock_set_tenths(12000); /* 20:00 unchanged */
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "20:00") == 0);
+
+	scoreboard_set_clock_pad_minutes(false);
+	scoreboard_clock_set_tenths(5400);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+}
+
 static void test_clock_format_null(void)
 {
 	scoreboard_clock_format(NULL, 0);
@@ -167,6 +195,7 @@ static void test_clock_format_null(void)
 static void test_clock_adjust_seconds(void)
 {
 	scoreboard_reset_state_for_tests();
+	scoreboard_clock_set_tenths(6000);
 	int initial = scoreboard_clock_get_tenths();
 	scoreboard_clock_adjust_seconds(10);
 	assert(scoreboard_clock_get_tenths() == initial + 100);
@@ -186,6 +215,7 @@ static void test_clock_adjust_seconds_floor(void)
 static void test_clock_adjust_minutes(void)
 {
 	scoreboard_reset_state_for_tests();
+	scoreboard_clock_set_tenths(6000);
 	int initial = scoreboard_clock_get_tenths();
 	scoreboard_clock_adjust_minutes(2);
 	assert(scoreboard_clock_get_tenths() == initial + 1200);
@@ -200,6 +230,72 @@ static void test_clock_adjust_minutes_floor(void)
 	scoreboard_clock_set_tenths(100);
 	scoreboard_clock_adjust_minutes(-5);
 	assert(scoreboard_clock_get_tenths() == 0);
+}
+
+static void test_clock_adjust_seconds_ceiling(void)
+{
+	/* Countdown: arrows cannot push the clock above the period length */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_length(1200); /* 20:00 */
+	scoreboard_clock_set_tenths(11950); /* 19:55 */
+	scoreboard_clock_adjust_seconds(10);
+	assert(scoreboard_clock_get_tenths() == 12000);
+	scoreboard_clock_adjust_seconds(1);
+	assert(scoreboard_clock_get_tenths() == 12000);
+}
+
+static void test_clock_adjust_minutes_ceiling(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_length(1200); /* 20:00 */
+	scoreboard_clock_set_tenths(11500); /* 19:10 */
+	scoreboard_clock_adjust_minutes(1);
+	assert(scoreboard_clock_get_tenths() == 12000);
+	scoreboard_clock_adjust_minutes(5);
+	assert(scoreboard_clock_get_tenths() == 12000);
+	/* Going back down still works normally */
+	scoreboard_clock_adjust_minutes(-1);
+	assert(scoreboard_clock_get_tenths() == 11400);
+}
+
+static void test_clock_adjust_ceiling_count_up(void)
+{
+	/* Count up: the period length is also the ceiling */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_clock_direction(SCOREBOARD_CLOCK_COUNT_UP);
+	scoreboard_set_period_length(1200);
+	scoreboard_clock_set_tenths(11800);
+	scoreboard_clock_adjust_minutes(1);
+	assert(scoreboard_clock_get_tenths() == 12000);
+	scoreboard_clock_adjust_seconds(30);
+	assert(scoreboard_clock_get_tenths() == 12000);
+}
+
+static void test_clock_adjust_ceiling_penalty_sync(void)
+{
+	/* Penalties only move by the delta actually applied to the clock */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_length(1200);
+	scoreboard_clock_set_tenths(11950);           /* 5s below max */
+	scoreboard_home_penalty_add(12, 120);         /* 1200 tenths */
+	scoreboard_clock_adjust_minutes(1);           /* only +5s applied */
+	assert(scoreboard_clock_get_tenths() == 12000);
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1250);
+	scoreboard_clock_adjust_seconds(10);          /* nothing applied */
+	assert(scoreboard_get_home_penalty(0)->remaining_tenths == 1250);
+}
+
+static void test_clock_adjust_above_max_not_reduced(void)
+{
+	/* A clock explicitly set above the max is not pulled down by "+" */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_period_length(1200);
+	scoreboard_clock_set_tenths(15000);
+	scoreboard_clock_adjust_seconds(1);
+	assert(scoreboard_clock_get_tenths() == 15000);
+	/* "-" still decreases normally */
+	scoreboard_clock_adjust_seconds(-1);
+	assert(scoreboard_clock_get_tenths() == 14990);
 }
 
 static void test_clock_direction(void)
@@ -414,6 +510,7 @@ static void test_penalty_clear_after_adjust(void)
 {
 	/* Verify a penalty can still be manually cleared after clock adjust */
 	scoreboard_reset_state_for_tests();
+	scoreboard_clock_set_tenths(6000); /* leave headroom below max */
 	scoreboard_home_penalty_add(12, 120); /* 1200 tenths */
 	scoreboard_away_penalty_add(22, 60);  /* 600 tenths */
 
@@ -1104,11 +1201,17 @@ int main(void)
 	test_clock_reset_countup();
 	test_clock_set_tenths_negative();
 	test_clock_format();
+	test_clock_format_pad_minutes();
 	test_clock_format_null();
 	test_clock_adjust_seconds();
 	test_clock_adjust_seconds_floor();
 	test_clock_adjust_minutes();
 	test_clock_adjust_minutes_floor();
+	test_clock_adjust_seconds_ceiling();
+	test_clock_adjust_minutes_ceiling();
+	test_clock_adjust_ceiling_count_up();
+	test_clock_adjust_ceiling_penalty_sync();
+	test_clock_adjust_above_max_not_reduced();
 	test_clock_direction();
 	test_period_length();
 	test_period_length_min();

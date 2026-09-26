@@ -34,6 +34,7 @@ enum scoreboard_sport {
 	SCOREBOARD_SPORT_FOOTBALL,
 	SCOREBOARD_SPORT_LACROSSE,
 	SCOREBOARD_SPORT_RUGBY,
+	SCOREBOARD_SPORT_FUTSAL,
 	SCOREBOARD_SPORT_GENERIC,
 	SCOREBOARD_SPORT_COUNT
 };
@@ -57,6 +58,7 @@ struct scoreboard_sport_preset {
 	int default_major_penalty_secs;
 	int base_strength;
 	int min_strength;
+	bool pad_clock_minutes; /* show "09:00" instead of "9:00" */
 };
 
 struct scoreboard_penalty {
@@ -83,6 +85,9 @@ void scoreboard_clock_set_tenths(int tenths);
 void scoreboard_clock_adjust_seconds(int delta);
 void scoreboard_clock_adjust_minutes(int delta);
 void scoreboard_clock_format(char *buf, size_t size);
+/* Leading zero on single-digit minutes ("09:00" vs "9:00") */
+void scoreboard_set_clock_pad_minutes(bool enabled);
+bool scoreboard_get_clock_pad_minutes(void);
 
 void scoreboard_set_clock_direction(enum scoreboard_clock_direction dir);
 enum scoreboard_clock_direction scoreboard_get_clock_direction(void);
@@ -242,6 +247,9 @@ const char *scoreboard_get_cli_extra_args(void);
 void scoreboard_set_sport(enum scoreboard_sport sport);
 enum scoreboard_sport scoreboard_get_sport(void);
 const struct scoreboard_sport_preset *scoreboard_get_sport_preset(void);
+/* Preset table entry for any sport (invalid values fall back to hockey) */
+const struct scoreboard_sport_preset *
+scoreboard_get_preset_for_sport(enum scoreboard_sport sport);
 const char *scoreboard_sport_name(enum scoreboard_sport sport);
 enum scoreboard_sport scoreboard_sport_from_name(const char *name);
 const char *scoreboard_get_segment_name(void);

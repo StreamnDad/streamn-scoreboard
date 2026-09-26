@@ -4,6 +4,33 @@ All notable changes to Streamn Scoreboard will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Futsal sport preset — two 20:00 halves with a count-down clock, accumulated team fouls counter, and two extra-time halves (OT, OT2)
+- Futsal: accumulated team fouls reset automatically when advancing to the 2nd half; the 2nd-half count carries into extra time. Going back from the 2nd to the 1st half restores the 1st-half counts
+- "Two-digit minutes" option in Game Settings — shows the clock as `09:00` instead of `9:00` (in `clock.txt` and the dock); on by default for futsal, off for other sports; remembered per OBS profile
+- Dock Colors in Game Settings — choose custom colors for the score and foul counters in the dock (the theme accent color can be hard to read); saved per OBS profile, with a "Default" button to restore the theme color
+
+### Fixed
+- Editing a penalty while the clock runs could change another player's penalty if the one being edited expired meanwhile; the edit now follows the same player, or is discarded if their penalty has ended
+- Switching sport in Game Settings now also sets that sport's default penalty durations (they kept the previous sport's values); penalty fields are hidden on open for sports without penalties
+- Pressing OK in Game Settings no longer rounds a non-whole-minute segment length (e.g. set via `period_length.txt`) and resets the clock
+- An external edit of any output file no longer makes a running clock jump back by up to 0.9 s
+- Changing the output directory now writes all files there immediately; files created later (first run, game clock enabled) are also watched for external edits
+- CLI jobs: cancelling shows "cancelled" instead of "failed"; arguments in quotes are kept together (`--title "Home vs Away"`); clearing or shutting down no longer leaves process callbacks pointing at freed memory
+- Period rewind (button and hotkey) is no longer possible while the clock runs, and the button asks for confirmation mid-period, like advance
+- OBS no longer crashes on quit (seen on macOS with OBS 32): the dock's update timer, file watcher and CLI processes are now tracked with guarded pointers, so shutdown no longer touches objects OBS has already destroyed
+- Release builds now show the release tag's version in the dock header, About dialog and plugin manager (previously always the version from `CMakeLists.txt`); set with `-DPLUGIN_VERSION_OVERRIDE`
+
+### Improved
+- Much less disk activity while the clock runs: output files are only rewritten when their content actually changes (previously all ~27 files were rewritten every 100 ms, making every OBS Text source reload). Files deleted by hand are recreated within about 5 seconds
+- The dock no longer restyles the Start/Stop button and resets the team name fields 10 times per second
+- On OBS exit the update timer is stopped and the final state is written while the dock still exists
+- Game Settings reads sport defaults from the core preset table instead of a duplicated copy, so the two can no longer drift apart
+
+### Changed
+- Windows CI/release builds use a new `windows-ci` preset (Ninja Multi-Config) so they work on runners with Visual Studio 2026
+- Clock +/- minute and second buttons (and hotkeys) no longer push the clock above the configured segment length (e.g. a 20:00 count-down stays capped at 20:00); running penalties only move by the time actually added
+
 ## [0.8.0] - 2026-04-17
 
 ### Added

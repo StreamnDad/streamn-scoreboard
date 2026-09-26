@@ -16,6 +16,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QProcess>
 #include <QtCore/QProcessEnvironment>
+#include <QtCore/QPointer>
 #include <QtCore/QStringList>
 #include <QtCore/QTextStream>
 #include <QtCore/QElapsedTimer>
@@ -23,6 +24,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtGui/QClipboard>
+#include <QtGui/QColor>
 #include <QtGui/QDesktopServices>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QPixmap>
@@ -33,6 +35,7 @@
 #include <QtWidgets/QAction>
 #endif
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QColorDialog>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
@@ -65,6 +68,9 @@ const char *kRecordChaptersKey = "record_chapters";
 const char *kGameClockEnabledKey = "game_clock_enabled";
 const char *kGameClockFormatKey = "game_clock_format";
 const char *kPenaltyLabelFormatKey = "penalty_label_format";
+const char *kScoreColorKey = "score_color";
+const char *kFoulsColorKey = "fouls_color";
+const char *kClockPadMinutesKey = "clock_pad_minutes";
 
 struct process_job {
 	int id = 0;
@@ -75,11 +81,14 @@ struct process_job {
 	QPushButton *view_logs = nullptr;
 	QPushButton *copy_logs = nullptr;
 	QPushButton *cancel = nullptr;
-	QProcess *process = nullptr;
+	/* QPointer: the process is parented to the dock widget, which OBS may
+	   destroy before the module unloads */
+	QPointer<QProcess> process;
 	QString stdout_log;
 	QString stderr_log;
 	bool running = false;
 	bool completed = false;
+	bool cancelled = false;
 };
 
 struct penalty_row_widgets {
@@ -127,8 +136,13 @@ QLabel *g_queue_title = nullptr;
 QFrame *g_queue_separator = nullptr;
 QScrollArea *g_queue_scroll = nullptr;
 QPushButton *g_clock_btn = nullptr;
-QTimer *g_tick_timer = nullptr;
-QFileSystemWatcher *g_file_watcher = nullptr;
+/* Guarded pointers: both objects are children of the dock widget. On OBS
+   shutdown the dock (and its children) can be destroyed before
+   obs_module_unload() runs, so raw pointers would dangle and calling
+   stop() on a deleted QTimer crashes OBS on quit (seen on macOS, OBS 32).
+   QPointer resets itself to null when the object is deleted. */
+QPointer<QTimer> g_tick_timer;
+QPointer<QFileSystemWatcher> g_file_watcher;
 QElapsedTimer g_write_cooldown;
 QElapsedTimer g_clock_elapsed;
 qint64 g_clock_remainder_ms = 0;
@@ -154,6 +168,10 @@ add_chapter_fn g_add_chapter = nullptr;
 get_last_recording_fn g_get_last_recording = nullptr;
 bool g_chapters_api_available = false;
 bool g_record_chapters_enabled = false;
+
+/* Dock value colors ("#rrggbb"); empty = theme default */
+QString g_score_color;
+QString g_fouls_color;
 bool g_recording_active = false;
 QElapsedTimer g_recording_timer;
 
@@ -461,19 +479,24 @@ void start_job_process(process_job *job, const QStringList &args)
 	QObject::connect(
 		job->process, &QProcess::errorOccurred,
 		[job](QProcess::ProcessError error) {
+			/* Only a failed start is terminal here; for crashes,
+			   kills and I/O errors finished() follows and reports
+			   the final status. */
+			if (error != QProcess::FailedToStart)
+				return;
 			capture_remaining_process_output(job);
-			QString status = "failed to start";
-			if (error == QProcess::FailedToStart)
-				status =
-					"failed to start (check CLI executable)";
-			complete_job(job, status);
+			complete_job(job,
+				     "failed to start (check CLI executable)");
 		});
 	QObject::connect(
 		job->process,
 		qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
 		[job](int exit_code, QProcess::ExitStatus status) {
 			capture_remaining_process_output(job);
-			if (status == QProcess::NormalExit && exit_code == 0) {
+			if (job->cancelled) {
+				complete_job(job, "cancelled");
+			} else if (status == QProcess::NormalExit &&
+				   exit_code == 0) {
 				complete_job(job, "completed");
 			} else {
 				complete_job(
@@ -525,6 +548,7 @@ void add_job_row(const QString &title, const QStringList &args)
 			 [job]() { copy_job_logs(job); });
 	QObject::connect(job->cancel, &QPushButton::clicked, [job]() {
 		if (job->process && job->running) {
+			job->cancelled = true;
 			job->text->setText(job->title +
 					   QString(" - cancelling"));
 			job->cancel->setEnabled(false);
@@ -538,6 +562,21 @@ void add_job_row(const QString &title, const QStringList &args)
 }
 
 
+/* Detach a job's process before the job struct is deleted: its signal
+   handlers capture the raw job pointer, so any signal emitted afterwards
+   (e.g. finished() while the process is torn down) would touch freed
+   memory. */
+void release_job_process(process_job *job)
+{
+	if (!job || !job->process)
+		return;
+	QObject::disconnect(job->process, nullptr, nullptr, nullptr);
+	if (job->running)
+		job->process->kill();
+	job->process->deleteLater();
+	job->process = nullptr;
+}
+
 void clear_completed_jobs()
 {
 	QVector<process_job *> remaining;
@@ -550,8 +589,7 @@ void clear_completed_jobs()
 				job->row->hide();
 				job->row->deleteLater();
 			}
-			if (job->process)
-				job->process->deleteLater();
+			release_job_process(job);
 			delete job;
 		} else {
 			remaining.push_back(job);
@@ -812,6 +850,13 @@ void update_copy_timestamps_visibility()
 	g_copy_timestamps_btn->setVisible(false);
 }
 
+/* Split user CLI arguments like a shell would, so quoted values with
+   spaces ("--title \"Home vs Away\"") stay one argument. */
+QStringList split_cli_args(const QString &text)
+{
+	return QProcess::splitCommand(text);
+}
+
 void run_reeln_segment_command()
 {
 	const QString executable =
@@ -822,7 +867,7 @@ void run_reeln_segment_command()
 		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
 	QStringList extra_parts;
 	if (!extra.isEmpty())
-		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+		extra_parts = split_cli_args(extra);
 
 	int period = scoreboard_get_period();
 	char period_buf[64];
@@ -846,7 +891,7 @@ void run_reeln_highlights_command()
 		QString::fromUtf8(scoreboard_get_cli_extra_args()).trimmed();
 	QStringList extra_parts;
 	if (!extra.isEmpty())
-		extra_parts = extra.split(' ', Qt::SkipEmptyParts);
+		extra_parts = split_cli_args(extra);
 
 	log_game_end_event();
 	QStringList args;
@@ -873,7 +918,13 @@ void update_all_labels()
 			g_highlights_btn->setEnabled(!clock_running);
 		if (g_period_adv_btn)
 			g_period_adv_btn->setEnabled(!clock_running);
-		if (clock_running) {
+		/* setStyleSheet() re-polishes the widget; this runs every
+		   100 ms, so only restyle when the running state flips */
+		static int s_styled_running = -1;
+		if (s_styled_running == (clock_running ? 1 : 0)) {
+			/* unchanged */
+		} else if (clock_running) {
+			s_styled_running = 1;
 			QPalette p = g_clock_btn->palette();
 			QColor base = p.color(QPalette::Button);
 			QColor red = QColor::fromHslF(0.0, 0.7,
@@ -884,6 +935,7 @@ void update_all_labels()
 				+ p.color(QPalette::BrightText).name()
 				+ ";");
 		} else {
+			s_styled_running = 0;
 			g_clock_btn->setStyleSheet("");
 		}
 	}
@@ -951,12 +1003,20 @@ void update_all_labels()
 	if (g_penalty_separator)
 		g_penalty_separator->setVisible(
 			scoreboard_get_has_penalties());
-	if (g_home_name_edit && !g_home_name_edit->hasFocus())
-		g_home_name_edit->setText(
-			QString::fromUtf8(scoreboard_get_home_name()));
-	if (g_away_name_edit && !g_away_name_edit->hasFocus())
-		g_away_name_edit->setText(
-			QString::fromUtf8(scoreboard_get_away_name()));
+	/* QLineEdit::setText() resets cursor and undo history even when the
+	   text is identical, so only update when the name really changed */
+	if (g_home_name_edit && !g_home_name_edit->hasFocus()) {
+		const QString name =
+			QString::fromUtf8(scoreboard_get_home_name());
+		if (g_home_name_edit->text() != name)
+			g_home_name_edit->setText(name);
+	}
+	if (g_away_name_edit && !g_away_name_edit->hasFocus()) {
+		const QString name =
+			QString::fromUtf8(scoreboard_get_away_name());
+		if (g_away_name_edit->text() != name)
+			g_away_name_edit->setText(name);
+	}
 	if (g_home_score_label)
 		g_home_score_label->setText(
 			QString::number(scoreboard_get_home_score()));
@@ -1193,6 +1253,25 @@ void rebuild_file_watcher()
 	}
 }
 
+/* Adds watched files that exist on disk but are not watched yet */
+void watch_missing_files()
+{
+	if (!g_file_watcher)
+		return;
+	const char *dir = scoreboard_get_output_directory();
+	if (dir[0] == '\0')
+		return;
+	const QStringList watched = g_file_watcher->files();
+	if (watched.size() >= kWatchedFileCount)
+		return;
+	const QString base = QString::fromUtf8(dir);
+	for (int i = 0; i < kWatchedFileCount; i++) {
+		const QString path = base + "/" + kWatchedFiles[i];
+		if (!watched.contains(path) && QFile::exists(path))
+			g_file_watcher->addPath(path);
+	}
+}
+
 void on_file_changed(const QString &path)
 {
 	if (g_write_cooldown.isValid() &&
@@ -1212,6 +1291,15 @@ void write_files_now()
 {
 	scoreboard_write_all_files();
 	g_write_cooldown.restart();
+	/* Files that did not exist when the watcher was built (first run,
+	   new folder, game clock just enabled) are picked up once they have
+	   been written. Checked at most every 5 s to keep ticks cheap. */
+	static QElapsedTimer s_last_watch_check;
+	if (g_file_watcher && (!s_last_watch_check.isValid() ||
+			       s_last_watch_check.elapsed() > 5000)) {
+		s_last_watch_check.restart();
+		watch_missing_files();
+	}
 }
 
 void on_tick()
@@ -1236,6 +1324,63 @@ void on_tick()
 	update_all_labels();
 	if (was_running && !is_running && g_clock_btn)
 		g_clock_btn->repaint();
+}
+
+/* ---- Dock value colors ---- */
+
+/* Returns a normalized "#rrggbb" string, or an empty string when the
+   input is missing/invalid (meaning "use the theme default"). */
+QString sanitize_color(const char *value)
+{
+	if (value == nullptr || value[0] == '\0')
+		return QString();
+	QColor c(QString::fromUtf8(value).trimmed());
+	return c.isValid() ? c.name() : QString();
+}
+
+/* Applies the user-selected colors to the score and foul counters in the
+   dock. Score falls back to the theme accent (QPalette::Highlight), fouls
+   fall back to the normal text color. Safe to call before the dock
+   widgets exist. */
+void apply_value_colors()
+{
+	if (g_home_score_label && g_away_score_label) {
+		QString color = g_score_color;
+		if (color.isEmpty())
+			color = g_home_score_label->palette()
+					.color(QPalette::Highlight)
+					.name();
+		const QString style =
+			"font-size: 18px; font-weight: bold; color: " + color +
+			";";
+		g_home_score_label->setStyleSheet(style);
+		g_away_score_label->setStyleSheet(style);
+	}
+	const QString foul_style =
+		g_fouls_color.isEmpty()
+			? QString()
+			: "font-weight: bold; color: " + g_fouls_color + ";";
+	QLabel *foul_labels[] = {g_home_fouls_label, g_away_fouls_label,
+				 g_home_fouls2_label, g_away_fouls2_label};
+	for (QLabel *label : foul_labels) {
+		if (label)
+			label->setStyleSheet(foul_style);
+	}
+}
+
+/* Re-applies the saved "two-digit minutes" choice from the profile.
+   Needed after anything that calls scoreboard_set_sport() (e.g. reading
+   sport.txt), since that resets the option to the sport's default. When
+   the user has never saved a choice, the sport default is kept. */
+void apply_saved_clock_pad_minutes()
+{
+	config_t *profile_cfg = obs_frontend_get_profile_config();
+	if (profile_cfg == nullptr ||
+	    !config_has_user_value(profile_cfg, kConfigSection,
+				   kClockPadMinutesKey))
+		return;
+	scoreboard_set_clock_pad_minutes(config_get_bool(
+		profile_cfg, kConfigSection, kClockPadMinutesKey));
 }
 
 /* ---- Profile paths ---- */
@@ -1271,13 +1416,21 @@ void load_profile_paths()
 			kPenaltyLabelFormatKey);
 		if (pen_fmt != nullptr && pen_fmt[0] != '\0')
 			scoreboard_set_penalty_label_format(pen_fmt);
+		const char *score_color = config_get_string(
+			profile_cfg, kConfigSection, kScoreColorKey);
+		g_score_color = sanitize_color(score_color);
+		const char *fouls_color = config_get_string(
+			profile_cfg, kConfigSection, kFoulsColorKey);
+		g_fouls_color = sanitize_color(fouls_color);
 	}
+	apply_saved_clock_pad_minutes();
 
 	scoreboard_set_output_directory(output_dir);
 	scoreboard_set_cli_executable(cli_exe);
 	scoreboard_set_cli_extra_args(cli_args);
 	g_environment_file =
 		env_file ? QString::fromUtf8(env_file).trimmed() : QString();
+	apply_value_colors();
 }
 
 void save_profile_paths()
@@ -1302,6 +1455,12 @@ void save_profile_paths()
 	config_set_string(profile_cfg, kConfigSection,
 			  kPenaltyLabelFormatKey,
 			  scoreboard_get_penalty_label_format());
+	config_set_string(profile_cfg, kConfigSection, kScoreColorKey,
+			  g_score_color.toUtf8().constData());
+	config_set_string(profile_cfg, kConfigSection, kFoulsColorKey,
+			  g_fouls_color.toUtf8().constData());
+	config_set_bool(profile_cfg, kConfigSection, kClockPadMinutesKey,
+			scoreboard_get_clock_pad_minutes());
 	config_save_safe(profile_cfg, "tmp", nullptr);
 }
 
@@ -1471,6 +1630,10 @@ void open_edit_penalty_dialog(QWidget *parent, bool home, int slot)
 	QVBoxLayout *layout = new QVBoxLayout(&dialog);
 
 	int current_secs = p->remaining_tenths / 10;
+	/* The clock keeps running while this modal dialog is open: the
+	   penalty may expire and the slots may be compacted, so remember
+	   which player it was and find it again on OK. */
+	const int player_number = p->player_number;
 
 	QHBoxLayout *dur_row = new QHBoxLayout();
 	dur_row->addWidget(new QLabel("Remaining (sec):", &dialog));
@@ -1489,11 +1652,29 @@ void open_edit_penalty_dialog(QWidget *parent, bool home, int slot)
 	layout->addWidget(buttons);
 
 	if (dialog.exec() == QDialog::Accepted) {
+		int target = -1;
+		for (int i = 0; i < SCOREBOARD_MAX_PENALTIES; i++) {
+			const struct scoreboard_penalty *cur =
+				home ? scoreboard_get_home_penalty(i)
+				     : scoreboard_get_away_penalty(i);
+			if (cur && cur->active &&
+			    cur->player_number == player_number) {
+				target = i;
+				if (i == slot)
+					break; /* prefer the original slot */
+			}
+		}
+		if (target < 0) {
+			log_info("[streamn-obs-scoreboard] penalty ended "
+				 "while editing — edit discarded");
+			update_all_labels();
+			return;
+		}
 		if (home)
-			scoreboard_home_penalty_set_time(slot,
+			scoreboard_home_penalty_set_time(target,
 							 dur_spin->value());
 		else
-			scoreboard_away_penalty_set_time(slot,
+			scoreboard_away_penalty_set_time(target,
 							 dur_spin->value());
 		write_files_now();
 		update_all_labels();
@@ -1542,6 +1723,10 @@ void open_configure_dialog(QWidget *parent)
 		scoreboard_set_output_directory(
 			out_input->text().trimmed().toUtf8().constData());
 		save_profile_paths();
+		/* Populate the new folder right away (otherwise it stays
+		   empty until something changes), then watch the files */
+		scoreboard_mark_dirty();
+		write_files_now();
 		rebuild_file_watcher();
 		update_all_labels();
 	}
@@ -1623,6 +1808,14 @@ void open_clock_settings_dialog(QWidget *parent)
 		up_btn->setChecked(true);
 		down_btn->setChecked(false);
 	});
+
+	QCheckBox *pad_minutes_check = new QCheckBox(
+		"Two-digit minutes (09:00 instead of 9:00)", &dialog);
+	pad_minutes_check->setChecked(scoreboard_get_clock_pad_minutes());
+	pad_minutes_check->setToolTip(
+		"Adds a leading zero to the clock when minutes are below 10.\n"
+		"Applies to clock.txt and the dock. On by default for futsal.");
+	layout->addWidget(pad_minutes_check);
 
 	QLabel *pen_dur_label =
 		new QLabel("Minor penalty (seconds):", &dialog);
@@ -1742,23 +1935,6 @@ void open_clock_settings_dialog(QWidget *parent)
 	str_label_input->setVisible(str_section_visible);
 	str_preview_label->setVisible(str_section_visible);
 
-	/* Preset duration/direction/features per sport (mirrors core table) */
-	struct sport_ui_info {
-		int duration_min;
-		bool count_down;
-		bool has_penalties;
-		bool has_fouls;
-		int base_strength;
-	};
-	static const sport_ui_info k_sport_ui[SCOREBOARD_SPORT_COUNT] = {
-		{15, true, true, false, 5},    /* hockey */
-		{8, true, false, true, 0},     /* basketball */
-		{45, false, false, true, 11},  /* soccer */
-		{30, true, false, true, 0},    /* football */
-		{12, true, true, false, 5},    /* lacrosse */
-		{40, false, true, false, 15},  /* rugby */
-		{0, false, false, false, 0},   /* generic */
-	};
 
 	/* Update dialog fields when sport changes */
 	QObject::connect(
@@ -1768,28 +1944,40 @@ void open_clock_settings_dialog(QWidget *parent)
 		 pen_label_label, pen_label_input,
 		 pen_preview_label, strength_spin, strength_label,
 		 str_label_header, str_label_label, str_label_input,
-		 str_preview_label](int index) {
+		 str_preview_label, pad_minutes_check](int index) {
 			if (index < 0 || index >= SCOREBOARD_SPORT_COUNT)
 				return;
-			const sport_ui_info &info = k_sport_ui[index];
-			if (info.duration_min > 0)
-				len_spin->setValue(info.duration_min);
-			if (info.count_down) {
+			/* Read defaults straight from the core preset table so
+			   the dialog can never drift from the core */
+			const struct scoreboard_sport_preset *preset =
+				scoreboard_get_preset_for_sport(
+					(enum scoreboard_sport)index);
+			if (preset->duration_seconds > 0)
+				len_spin->setValue(preset->duration_seconds /
+						   60);
+			if (preset->default_direction ==
+			    SCOREBOARD_CLOCK_COUNT_DOWN) {
 				down_btn->setChecked(true);
 				up_btn->setChecked(false);
 			} else {
 				up_btn->setChecked(true);
 				down_btn->setChecked(false);
 			}
-			pen_dur_label->setVisible(info.has_penalties);
-			pen_dur_spin->setVisible(info.has_penalties);
-			major_pen_dur_label->setVisible(info.has_penalties);
-			major_pen_dur_spin->setVisible(info.has_penalties);
-			pen_label_header->setVisible(info.has_penalties);
-			pen_label_label->setVisible(info.has_penalties);
-			pen_label_input->setVisible(info.has_penalties);
-			pen_preview_label->setVisible(info.has_penalties);
-			bool show_strength = info.base_strength > 0;
+			if (preset->default_penalty_secs > 0)
+				pen_dur_spin->setValue(
+					preset->default_penalty_secs);
+			if (preset->default_major_penalty_secs > 0)
+				major_pen_dur_spin->setValue(
+					preset->default_major_penalty_secs);
+			pen_dur_label->setVisible(preset->has_penalties);
+			pen_dur_spin->setVisible(preset->has_penalties);
+			major_pen_dur_label->setVisible(preset->has_penalties);
+			major_pen_dur_spin->setVisible(preset->has_penalties);
+			pen_label_header->setVisible(preset->has_penalties);
+			pen_label_label->setVisible(preset->has_penalties);
+			pen_label_input->setVisible(preset->has_penalties);
+			pen_preview_label->setVisible(preset->has_penalties);
+			bool show_strength = preset->base_strength > 0;
 			strength_label->setVisible(show_strength);
 			strength_spin->setVisible(show_strength);
 			str_label_header->setVisible(show_strength);
@@ -1797,8 +1985,24 @@ void open_clock_settings_dialog(QWidget *parent)
 			str_label_input->setVisible(show_strength);
 			str_preview_label->setVisible(show_strength);
 			if (show_strength)
-				strength_spin->setValue(info.base_strength);
+				strength_spin->setValue(preset->base_strength);
+			pad_minutes_check->setChecked(preset->pad_clock_minutes);
 		});
+
+	/* Initial visibility of the penalty fields for the current sport
+	   (the handler above only runs when the selection changes) */
+	{
+		const bool has_pen = scoreboard_get_has_penalties();
+		pen_dur_label->setVisible(has_pen);
+		pen_dur_spin->setVisible(has_pen);
+		major_pen_dur_label->setVisible(has_pen);
+		major_pen_dur_spin->setVisible(has_pen);
+		pen_label_header->setVisible(has_pen);
+		pen_label_label->setVisible(has_pen);
+		pen_label_input->setVisible(has_pen);
+		pen_preview_label->setVisible(has_pen);
+	}
+	const int initial_len_minutes = len_spin->value();
 
 	/* Period labels button */
 	QHBoxLayout *labels_row = new QHBoxLayout();
@@ -1945,6 +2149,70 @@ void open_clock_settings_dialog(QWidget *parent)
 	gc_fmt_row->addWidget(gc_fmt_combo, 1);
 	layout->addLayout(gc_fmt_row);
 
+	/* Dock colors — lets users pick readable colors for the score and
+	   foul counters when the theme accent color has poor contrast. */
+	QLabel *colors_header = new QLabel("<b>Dock Colors</b>", &dialog);
+	layout->addWidget(colors_header);
+
+	QString pending_score_color = g_score_color;
+	QString pending_fouls_color = g_fouls_color;
+
+	auto add_color_row = [&dialog, layout](const QString &label_text,
+					       const QString &tooltip,
+					       QString *value) {
+		QHBoxLayout *row = new QHBoxLayout();
+		row->addWidget(new QLabel(label_text, &dialog));
+		QPushButton *pick_btn = new QPushButton(&dialog);
+		pick_btn->setToolTip(tooltip);
+		pick_btn->setMinimumWidth(110);
+		QPushButton *reset_btn = new QPushButton("Default", &dialog);
+		reset_btn->setToolTip("Use the OBS theme color");
+		auto refresh = [pick_btn, reset_btn, value]() {
+			if (value->isEmpty()) {
+				pick_btn->setText("Theme default");
+				pick_btn->setStyleSheet("");
+			} else {
+				QColor c(*value);
+				QString text_color =
+					c.lightnessF() > 0.5 ? "#000000"
+							     : "#ffffff";
+				pick_btn->setText(value->toUpper());
+				pick_btn->setStyleSheet(
+					"QPushButton { background-color: " +
+					*value + "; color: " + text_color +
+					"; }");
+			}
+			reset_btn->setEnabled(!value->isEmpty());
+		};
+		refresh();
+		QObject::connect(pick_btn, &QPushButton::clicked,
+				 [&dialog, value, refresh, label_text]() {
+					 QColor initial = value->isEmpty()
+								  ? QColor(Qt::white)
+								  : QColor(*value);
+					 QColor c = QColorDialog::getColor(
+						 initial, &dialog, label_text);
+					 if (c.isValid()) {
+						 *value = c.name();
+						 refresh();
+					 }
+				 });
+		QObject::connect(reset_btn, &QPushButton::clicked,
+				 [value, refresh]() {
+					 value->clear();
+					 refresh();
+				 });
+		row->addWidget(pick_btn, 1);
+		row->addWidget(reset_btn);
+		layout->addLayout(row);
+	};
+	add_color_row("Score color:",
+		      "Color of the score numbers in the dock",
+		      &pending_score_color);
+	add_color_row("Fouls color:",
+		      "Color of the foul / card counters in the dock",
+		      &pending_fouls_color);
+
 	QDialogButtonBox *buttons = new QDialogButtonBox(
 		QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
 	QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
@@ -1960,11 +2228,21 @@ void open_clock_settings_dialog(QWidget *parent)
 
 	if (dialog.exec() == QDialog::Accepted) {
 		int sport_idx = sport_combo->currentIndex();
-		if (sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
-		    sport_idx != (int)scoreboard_get_sport())
+		const bool sport_changed =
+			sport_idx >= 0 && sport_idx < SCOREBOARD_SPORT_COUNT &&
+			sport_idx != (int)scoreboard_get_sport();
+		if (sport_changed)
 			scoreboard_set_sport(
 				(enum scoreboard_sport)sport_idx);
-		scoreboard_set_period_length(len_spin->value() * 60);
+		/* The spin box only holds whole minutes: apply it only when
+		   it was changed (by the user or a sport switch), so a
+		   non-minute length (e.g. from period_length.txt) is not
+		   rounded and the clock is not reset just by pressing OK */
+		if (sport_changed ||
+		    len_spin->value() != initial_len_minutes)
+			scoreboard_set_period_length(len_spin->value() * 60);
+		scoreboard_set_clock_pad_minutes(
+			pad_minutes_check->isChecked());
 		scoreboard_set_clock_direction(
 			down_btn->isChecked() ? SCOREBOARD_CLOCK_COUNT_DOWN
 					      : SCOREBOARD_CLOCK_COUNT_UP);
@@ -1988,6 +2266,9 @@ void open_clock_settings_dialog(QWidget *parent)
 		scoreboard_set_game_clock_display_format(
 			(enum scoreboard_game_clock_format)
 				gc_fmt_combo->currentIndex());
+		g_score_color = pending_score_color;
+		g_fouls_color = pending_fouls_color;
+		apply_value_colors();
 		save_profile_paths();
 		if (scoreboard_get_period_length() != prev_period_length ||
 		    scoreboard_get_clock_direction() != prev_direction)
@@ -2199,8 +2480,12 @@ void hk_period_advance(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 
 void hk_period_rewind(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
-	if (pressed)
-		scoreboard_period_rewind();
+	if (!pressed)
+		return;
+	/* Same rule as advance: never while the clock is running */
+	if (scoreboard_clock_is_running())
+		return;
+	scoreboard_period_rewind();
 }
 
 void hk_home_pen_add(void *, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -2688,6 +2973,15 @@ void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		update_highlights_button_visibility();
 		update_copy_timestamps_visibility();
 	}
+	/* OBS is quitting: stop the tick timer now, while the dock still
+	   exists, and flush the final state to disk. */
+	if (event == OBS_FRONTEND_EVENT_EXIT) {
+		if (g_tick_timer)
+			g_tick_timer->stop();
+		if (scoreboard_is_dirty())
+			write_files_now();
+		return;
+	}
 	/* OBS frontend events and Qt button/hotkey callbacks all run on the
 	   main (Qt) thread, so g_stream_active and g_stream_timer are safe
 	   to access without additional synchronization. */
@@ -2776,6 +3070,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	scoreboard_reset_state_for_tests();
 	load_profile_paths();
 	scoreboard_read_all_files();
+	apply_saved_clock_pad_minutes();
 
 	/* Detect OBS 32+ recording chapter API at runtime for backwards
 	   compatibility.  These symbols only exist in obs-frontend-api 32+. */
@@ -3169,6 +3464,7 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 	fouls2_row->addWidget(away_foul2_plus);
 	fouls2_row->addStretch(1);
 	root->addWidget(g_fouls2_row_widget);
+	apply_value_colors();
 
 	/* Penalty separator — hidden when penalties are off */
 	g_penalty_separator = new QFrame(widget);
@@ -3372,6 +3668,11 @@ bool scoreboard_dock_init(scoreboard_log_fn log_fn)
 		update_all_labels();
 	});
 	QObject::connect(period_rew_btn, &QPushButton::clicked, []() {
+		/* Rewinding resets the clock: guard it like advance */
+		if (scoreboard_clock_is_running() ||
+		    !confirm_mid_period_action(g_dock_widget,
+					       "go back to the previous period"))
+			return;
 		scoreboard_period_rewind();
 		update_all_labels();
 	});
@@ -3611,12 +3912,14 @@ void scoreboard_dock_shutdown(void)
 	obs_frontend_remove_save_callback(save_hotkeys, nullptr);
 
 	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
-	obs_frontend_remove_dock(kDockId);
 
-	if (g_tick_timer) {
+	/* Stop ticking before the dock goes away. If OBS already destroyed
+	   the dock, the QPointer is null and this is skipped. */
+	if (g_tick_timer)
 		g_tick_timer->stop();
-		g_tick_timer = nullptr;
-	}
+	g_tick_timer = nullptr;
+
+	obs_frontend_remove_dock(kDockId);
 
 	g_file_watcher = nullptr;
 
@@ -3632,10 +3935,7 @@ void scoreboard_dock_shutdown(void)
 	for (process_job *job : g_jobs) {
 		if (!job)
 			continue;
-		if (job->process && job->running)
-			job->process->kill();
-		if (job->process)
-			job->process->deleteLater();
+		release_job_process(job);
 		delete job;
 	}
 	g_jobs.clear();

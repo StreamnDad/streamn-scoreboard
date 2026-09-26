@@ -19,13 +19,28 @@ jobs:
           - os: macos-14
             preset: default
           - os: windows-latest
-            preset: windows
+            preset: windows-ci
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ensure Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          ninja --version
 
       - name: Configure (core-only)
         run: cmake --preset ${{ matrix.preset }} -DBUILD_PLUGIN_MODULE=OFF
@@ -182,6 +197,15 @@ jobs:
         with:
           arch: x64
 
+      - name: Ensure Ninja (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          ninja --version
+
       - name: Install Qt5
         uses: jurplel/install-qt-action@v4
         with:
@@ -234,7 +258,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake --preset windows `
+          cmake --preset windows-ci `
             -DOBS_INCLUDE_DIR="obs-source/libobs" `
             -DOBS_LIBRARY="obs-libs/obs.lib" `
             -DOBS_SOURCE_DIR="obs-source" `

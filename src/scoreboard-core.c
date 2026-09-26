@@ -15,14 +15,15 @@
 #define SCOREBOARD_SEGMENT_NAME_SIZE 16
 
 static const struct scoreboard_sport_preset k_sport_presets[SCOREBOARD_SPORT_COUNT] = {
-	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs, base_strength, min_strength */
-	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300, 5,  3},
-	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0,   0,  0},
-	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0,   11, 7},
-	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0},
-	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3},
-	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13},
-	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0},
+	/* sport, segment_name, segment_count, duration_seconds, ot_max, has_shots, has_faceoffs, has_penalties, default_direction, has_fouls, foul_label, foul_label2, log_scores, score_label, default_penalty_secs, default_major_penalty_secs, base_strength, min_strength, pad_clock_minutes */
+	{SCOREBOARD_SPORT_HOCKEY,     "Period",  3, 900,  4, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  120, 300, 5,  3, false},
+	{SCOREBOARD_SPORT_BASKETBALL, "Quarter", 4, 480,  1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", false, "Score", 0,   0,   0,  0, false},
+	{SCOREBOARD_SPORT_SOCCER,     "Half",    2, 2700, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   true,  "YC",    "RC", true,  "Goal",  0,   0,   11, 7, false},
+	{SCOREBOARD_SPORT_FOOTBALL,   "Half",    2, 1800, 1, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Flags", "", false, "Score", 0,   0,   0,  0, false},
+	{SCOREBOARD_SPORT_LACROSSE,   "Quarter", 4, 720,  1, true,  true,  true,  SCOREBOARD_CLOCK_COUNT_DOWN, false, "",      "", true,  "Goal",  60,  180, 5,  3, false},
+	{SCOREBOARD_SPORT_RUGBY,      "Half",    2, 2400, 1, false, false, true,  SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Try",   120, 600, 15, 13, false},
+	{SCOREBOARD_SPORT_FUTSAL,     "Half",    2, 1200, 2, false, false, false, SCOREBOARD_CLOCK_COUNT_DOWN, true,  "Fouls", "", true,  "Goal",  0,   0,   0,  0, true},
+	{SCOREBOARD_SPORT_GENERIC,    "Segment", 1, 0,    0, false, false, false, SCOREBOARD_CLOCK_COUNT_UP,   false, "",      "", true,  "Score", 120, 300, 0,  0, false},
 };
 
 static struct {
@@ -35,6 +36,8 @@ static struct {
 	int game_clock_accumulated_tenths;
 	bool game_clock_started;
 	enum scoreboard_game_clock_format game_clock_display_format;
+
+	bool clock_pad_minutes;
 
 	int period;
 	bool overtime_enabled;
@@ -71,6 +74,11 @@ static struct {
 	int home_fouls2;
 	int away_fouls2;
 	char foul_label2[16];
+	/* Futsal: 1st-half fouls saved when they are reset at the start of
+	   the 2nd half, restored if the operator rewinds back to the 1st */
+	bool first_half_fouls_saved;
+	int first_half_home_fouls;
+	int first_half_away_fouls;
 	bool log_scores;
 	char score_label[16];
 
@@ -280,16 +288,95 @@ static void parse_penalty_files(const char *numbers_text,
 	}
 }
 
+/* ---- output file write cache ----
+   While the clock runs the state is dirty on every 100 ms tick, but most of
+   the ~27 output files (team names, score, sport, labels, ...) do not
+   change, and clock.txt itself only changes once per second. Rewriting
+   identical files wastes disk I/O and makes every OBS Text source that
+   reads from a file reload. We remember a hash of the last content written
+   to each path and skip the write when it is unchanged. The cache is
+   invalidated whenever the files may have been changed externally (read
+   back from disk), the output directory changes, a write fails, and
+   periodically, so a file deleted by hand is recreated within a few
+   seconds even if its content has not changed. */
+#define SCOREBOARD_FILE_CACHE_SIZE 64
+#define SCOREBOARD_FILE_CACHE_REFRESH_PASSES 50 /* ~5 s at 100 ms ticks */
+
+struct file_cache_entry {
+	unsigned long long path_hash;
+	unsigned long long content_hash;
+	size_t content_len;
+	bool valid;
+};
+
+static struct file_cache_entry g_file_cache[SCOREBOARD_FILE_CACHE_SIZE];
+static int g_file_cache_next = 0;
+static int g_file_cache_passes = 0;
+
+static unsigned long long fnv1a_hash(const char *text, size_t *len_out)
+{
+	unsigned long long h = 1469598103934665603ULL;
+	size_t len = 0;
+	for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+		h ^= *p;
+		h *= 1099511628211ULL;
+		len++;
+	}
+	if (len_out)
+		*len_out = len;
+	return h;
+}
+
+static void file_cache_invalidate(void)
+{
+	memset(g_file_cache, 0, sizeof(g_file_cache));
+	g_file_cache_next = 0;
+	g_file_cache_passes = 0;
+}
+
+static struct file_cache_entry *file_cache_find(unsigned long long path_hash)
+{
+	for (int i = 0; i < SCOREBOARD_FILE_CACHE_SIZE; i++) {
+		if (g_file_cache[i].valid &&
+		    g_file_cache[i].path_hash == path_hash)
+			return &g_file_cache[i];
+	}
+	return NULL;
+}
+
 static bool write_text_file(const char *dir, const char *filename,
 			    const char *content)
 {
 	char path[1024];
 	snprintf(path, sizeof(path), "%s/%s", dir, filename);
+
+	unsigned long long path_hash = fnv1a_hash(path, NULL);
+	size_t content_len = 0;
+	unsigned long long content_hash = fnv1a_hash(content, &content_len);
+	struct file_cache_entry *entry = file_cache_find(path_hash);
+	if (entry != NULL && entry->content_hash == content_hash &&
+	    entry->content_len == content_len)
+		return true; /* unchanged since our last write */
+
 	FILE *f = fopen(path, "w");
-	if (f == NULL)
+	if (f == NULL) {
+		/* The directory may be gone: forget everything so all files
+		   are recreated once writing works again */
+		file_cache_invalidate();
 		return false;
+	}
 	fprintf(f, "%s", content);
 	fclose(f);
+
+	if (entry == NULL) {
+		entry = &g_file_cache[g_file_cache_next];
+		g_file_cache_next =
+			(g_file_cache_next + 1) % SCOREBOARD_FILE_CACHE_SIZE;
+	}
+	entry->path_hash = path_hash;
+	entry->content_hash = content_hash;
+	entry->content_len = content_len;
+	entry->valid = true;
 	return true;
 }
 
@@ -383,6 +470,7 @@ void scoreboard_on_unload(scoreboard_log_fn log_fn)
 void scoreboard_reset_state_for_tests(void)
 {
 	memset(&g_state, 0, sizeof(g_state));
+	file_cache_invalidate();
 	g_dirty = false;
 	g_event_count = 0;
 	memset(g_event_log, 0, sizeof(g_event_log));
@@ -488,28 +576,35 @@ void scoreboard_clock_set_tenths(int tenths)
 	mark_dirty();
 }
 
-void scoreboard_clock_adjust_seconds(int delta)
+/* Shift the clock by delta_tenths, clamped to [0, period_length].
+   Manual adjustments (arrow buttons / hotkeys) must never push the clock
+   past the configured segment length. If the clock is already above the
+   limit (e.g. set explicitly), an increase leaves it untouched rather
+   than pulling it down. Penalties follow the actual applied delta. */
+static void clock_adjust_tenths(int delta_tenths)
 {
 	int before = g_state.clock_tenths;
-	g_state.clock_tenths += delta * 10;
-	if (g_state.clock_tenths < 0)
-		g_state.clock_tenths = 0;
+	int max_tenths = g_state.period_length * 10;
+	int target = before + delta_tenths;
+	if (target < 0)
+		target = 0;
+	if (delta_tenths > 0 && target > max_tenths)
+		target = before > max_tenths ? before : max_tenths;
+	g_state.clock_tenths = target;
 	mark_dirty();
 	int actual_delta = g_state.clock_tenths - before;
 	if (actual_delta != 0)
 		scoreboard_penalty_adjust(actual_delta);
 }
 
+void scoreboard_clock_adjust_seconds(int delta)
+{
+	clock_adjust_tenths(delta * 10);
+}
+
 void scoreboard_clock_adjust_minutes(int delta)
 {
-	int before = g_state.clock_tenths;
-	g_state.clock_tenths += delta * 600;
-	if (g_state.clock_tenths < 0)
-		g_state.clock_tenths = 0;
-	mark_dirty();
-	int actual_delta = g_state.clock_tenths - before;
-	if (actual_delta != 0)
-		scoreboard_penalty_adjust(actual_delta);
+	clock_adjust_tenths(delta * 600);
 }
 
 void scoreboard_clock_format(char *buf, size_t size)
@@ -519,7 +614,19 @@ void scoreboard_clock_format(char *buf, size_t size)
 	int total_seconds = g_state.clock_tenths / 10;
 	int minutes = total_seconds / 60;
 	int seconds = total_seconds % 60;
-	snprintf(buf, size, "%d:%02d", minutes, seconds);
+	snprintf(buf, size, g_state.clock_pad_minutes ? "%02d:%02d" : "%d:%02d",
+		 minutes, seconds);
+}
+
+void scoreboard_set_clock_pad_minutes(bool enabled)
+{
+	g_state.clock_pad_minutes = enabled;
+	mark_dirty();
+}
+
+bool scoreboard_get_clock_pad_minutes(void)
+{
+	return g_state.clock_pad_minutes;
 }
 
 void scoreboard_set_clock_direction(enum scoreboard_clock_direction dir)
@@ -640,6 +747,19 @@ void scoreboard_period_advance(void)
 				current_period_elapsed_tenths();
 		g_state.period++;
 		scoreboard_clock_reset();
+		/* Futsal: accumulated team fouls are counted per half, so they
+		   reset when the 2nd half starts. Extra time (OT) continues
+		   the 2nd-half count, so no reset after period 2. */
+		if (g_state.sport == SCOREBOARD_SPORT_FUTSAL &&
+		    g_state.period == 2) {
+			g_state.first_half_home_fouls = g_state.home_fouls;
+			g_state.first_half_away_fouls = g_state.away_fouls;
+			g_state.first_half_fouls_saved = true;
+			g_state.home_fouls = 0;
+			g_state.away_fouls = 0;
+			scoreboard_add_action_log(
+				"Futsal: accumulated fouls reset for 2nd half");
+		}
 		mark_dirty();
 	}
 }
@@ -655,6 +775,16 @@ void scoreboard_period_rewind(void)
 		}
 		g_state.period--;
 		scoreboard_clock_reset();
+		/* Futsal: undo the 2nd-half foul reset when going back to the
+		   1st half, restoring the counts from before the advance */
+		if (g_state.sport == SCOREBOARD_SPORT_FUTSAL &&
+		    g_state.period == 1 && g_state.first_half_fouls_saved) {
+			g_state.home_fouls = g_state.first_half_home_fouls;
+			g_state.away_fouls = g_state.first_half_away_fouls;
+			g_state.first_half_fouls_saved = false;
+			scoreboard_add_action_log(
+				"Futsal: 1st-half accumulated fouls restored");
+		}
 		mark_dirty();
 	}
 }
@@ -1711,6 +1841,7 @@ void scoreboard_set_output_directory(const char *path)
 {
 	safe_copy(g_state.output_directory, path,
 		  sizeof(g_state.output_directory));
+	file_cache_invalidate();
 }
 
 const char *scoreboard_get_output_directory(void)
@@ -1726,6 +1857,9 @@ bool scoreboard_write_all_files(void)
 	const char *dir = g_state.output_directory;
 	if (dir[0] == '\0')
 		return false;
+
+	if (++g_file_cache_passes >= SCOREBOARD_FILE_CACHE_REFRESH_PASSES)
+		file_cache_invalidate();
 
 	char buf[64];
 	bool ok = true;
@@ -1843,12 +1977,19 @@ bool scoreboard_read_all_files(void)
 	if (dir[0] == '\0')
 		return false;
 
+	/* Files may have been edited externally: never trust the cache */
+	file_cache_invalidate();
+
 	char buf[512];
 	bool ok = true;
 
 	if (read_text_file(dir, "clock.txt", buf, sizeof(buf))) {
 		int tenths = parse_clock_text(buf);
-		if (tenths >= 0)
+		/* clock.txt only has whole seconds. If it shows the same second
+		   we are already at, keep our tenths: adopting the file value
+		   would make a running clock jump back by up to 0.9 s every
+		   time any output file is edited externally. */
+		if (tenths >= 0 && tenths / 10 != g_state.clock_tenths / 10)
 			g_state.clock_tenths = tenths;
 	} else {
 		ok = false;
@@ -2005,6 +2146,8 @@ bool scoreboard_save_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	fprintf(f, "  \"game_clock_started\": %s,\n",
 		g_state.game_clock_started ? "true" : "false");
+	fprintf(f, "  \"clock_pad_minutes\": %s,\n",
+		g_state.clock_pad_minutes ? "true" : "false");
 	fprintf(f, "  \"game_clock_display_format\": %d,\n",
 		(int)g_state.game_clock_display_format);
 	write_json_string(f, "penalty_label_format",
@@ -2021,6 +2164,12 @@ bool scoreboard_save_state(const char *path)
 	fprintf(f, "  \"away_fouls\": %d,\n", g_state.away_fouls);
 	fprintf(f, "  \"home_fouls2\": %d,\n", g_state.home_fouls2);
 	fprintf(f, "  \"away_fouls2\": %d,\n", g_state.away_fouls2);
+	fprintf(f, "  \"first_half_fouls_saved\": %s,\n",
+		g_state.first_half_fouls_saved ? "true" : "false");
+	fprintf(f, "  \"first_half_home_fouls\": %d,\n",
+		g_state.first_half_home_fouls);
+	fprintf(f, "  \"first_half_away_fouls\": %d,\n",
+		g_state.first_half_away_fouls);
 	write_json_string(f, "sport", scoreboard_sport_name(g_state.sport),
 			  false);
 	fprintf(f, "  \"base_strength\": %d,\n", g_state.base_strength);
@@ -2114,6 +2263,8 @@ bool scoreboard_load_state(const char *path)
 		g_state.game_clock_accumulated_tenths);
 	g_state.game_clock_started = parse_json_bool(
 		json, "game_clock_started", g_state.game_clock_started);
+	g_state.clock_pad_minutes = parse_json_bool(
+		json, "clock_pad_minutes", g_state.clock_pad_minutes);
 	g_state.game_clock_display_format =
 		(enum scoreboard_game_clock_format)parse_json_int(
 			json, "game_clock_display_format",
@@ -2148,6 +2299,13 @@ bool scoreboard_load_state(const char *path)
 		parse_json_int(json, "home_fouls2", g_state.home_fouls2);
 	g_state.away_fouls2 =
 		parse_json_int(json, "away_fouls2", g_state.away_fouls2);
+	g_state.first_half_fouls_saved = parse_json_bool(
+		json, "first_half_fouls_saved",
+		g_state.first_half_fouls_saved);
+	g_state.first_half_home_fouls = parse_json_int(
+		json, "first_half_home_fouls", g_state.first_half_home_fouls);
+	g_state.first_half_away_fouls = parse_json_int(
+		json, "first_half_away_fouls", g_state.first_half_away_fouls);
 	g_state.base_strength =
 		parse_json_int(json, "base_strength", g_state.base_strength);
 	parse_json_string(json, "strength_label_format",
@@ -2219,6 +2377,9 @@ void scoreboard_new_game(void)
 	g_state.away_fouls = 0;
 	g_state.home_fouls2 = 0;
 	g_state.away_fouls2 = 0;
+	g_state.first_half_fouls_saved = false;
+	g_state.first_half_home_fouls = 0;
+	g_state.first_half_away_fouls = 0;
 	g_state.period = 1;
 	g_state.clock_running = false;
 
@@ -2271,7 +2432,7 @@ const char *scoreboard_get_cli_extra_args(void)
 
 static const char *k_sport_names[SCOREBOARD_SPORT_COUNT] = {
 	"hockey", "basketball", "soccer", "football", "lacrosse", "rugby",
-	"generic",
+	"futsal", "generic",
 };
 
 void scoreboard_set_sport(enum scoreboard_sport sport)
@@ -2279,6 +2440,8 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 	if (sport < 0 || sport >= SCOREBOARD_SPORT_COUNT)
 		sport = SCOREBOARD_SPORT_HOCKEY;
 	const struct scoreboard_sport_preset *p = &k_sport_presets[sport];
+	if (sport != g_state.sport)
+		g_state.first_half_fouls_saved = false;
 	g_state.sport = sport;
 	safe_copy(g_state.segment_name, p->segment_name,
 		  sizeof(g_state.segment_name));
@@ -2305,6 +2468,7 @@ void scoreboard_set_sport(enum scoreboard_sport sport)
 			p->default_major_penalty_secs;
 	g_state.base_strength = p->base_strength;
 	g_state.min_strength = p->min_strength;
+	g_state.clock_pad_minutes = p->pad_clock_minutes;
 	generate_default_period_labels();
 	mark_dirty();
 }
@@ -2317,6 +2481,14 @@ enum scoreboard_sport scoreboard_get_sport(void)
 const struct scoreboard_sport_preset *scoreboard_get_sport_preset(void)
 {
 	return &k_sport_presets[g_state.sport];
+}
+
+const struct scoreboard_sport_preset *
+scoreboard_get_preset_for_sport(enum scoreboard_sport sport)
+{
+	if (sport < 0 || sport >= SCOREBOARD_SPORT_COUNT)
+		sport = SCOREBOARD_SPORT_HOCKEY;
+	return &k_sport_presets[sport];
 }
 
 const char *scoreboard_sport_name(enum scoreboard_sport sport)

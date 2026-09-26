@@ -50,6 +50,127 @@ static char *read_file_content(const char *path)
 	return buf;
 }
 
+static void overwrite_file(const char *path, const char *text)
+{
+	FILE *f = fopen(path, "w");
+	assert(f != NULL);
+	fputs(text, f);
+	fclose(f);
+}
+
+static void test_write_skips_unchanged_files(void)
+{
+	/* Unchanged content is not rewritten (avoids needless disk I/O and
+	   OBS text source reloads on every 100 ms tick) */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_home_name("Eagles");
+	assert(scoreboard_write_all_files());
+
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_name.txt", g_tmp_dir);
+	overwrite_file(path, "External");
+
+	/* State dirty but home name unchanged: file is left alone */
+	scoreboard_set_home_score(1);
+	assert(scoreboard_write_all_files());
+	char *content = read_file_content(path);
+	assert(strcmp(content, "External") == 0);
+	free(content);
+
+	/* Changed content is written */
+	scoreboard_set_home_name("Falcons");
+	assert(scoreboard_write_all_files());
+	content = read_file_content(path);
+	assert(strcmp(content, "Falcons") == 0);
+	free(content);
+
+	/* Reading files back invalidates the cache: next write is full */
+	assert(scoreboard_read_all_files());
+	overwrite_file(path, "Other");
+	scoreboard_mark_dirty();
+	assert(scoreboard_write_all_files());
+	content = read_file_content(path);
+	assert(strcmp(content, "Falcons") == 0);
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_write_cache_periodic_refresh(void)
+{
+	/* A file deleted by hand comes back within a bounded number of
+	   write passes even if its content never changes */
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_home_name("Eagles");
+	assert(scoreboard_write_all_files());
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_name.txt", g_tmp_dir);
+	remove(path);
+	bool recreated = false;
+	for (int i = 0; i < 60 && !recreated; i++) {
+		scoreboard_mark_dirty();
+		assert(scoreboard_write_all_files());
+		char *content = read_file_content(path);
+		if (content) {
+			assert(strcmp(content, "Eagles") == 0);
+			free(content);
+			recreated = true;
+		}
+	}
+	assert(recreated);
+	cleanup_tmp_dir();
+}
+
+static void test_write_failure_invalidates_cache(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_set_home_name("Eagles");
+	assert(scoreboard_write_all_files());
+
+	/* Output directory disappears: writes fail */
+	cleanup_tmp_dir();
+	scoreboard_set_home_score(2);
+	assert(!scoreboard_write_all_files());
+
+	/* Directory is back: unchanged files must be written again */
+	setup_tmp_dir();
+	scoreboard_mark_dirty();
+	assert(scoreboard_write_all_files());
+	char path[512];
+	snprintf(path, sizeof(path), "%s/home_name.txt", g_tmp_dir);
+	char *content = read_file_content(path);
+	assert(content != NULL);
+	assert(strcmp(content, "Eagles") == 0);
+	free(content);
+
+	cleanup_tmp_dir();
+}
+
+static void test_read_keeps_clock_tenths_same_second(void)
+{
+	scoreboard_reset_state_for_tests();
+	setup_tmp_dir();
+	scoreboard_set_output_directory(g_tmp_dir);
+	scoreboard_clock_set_tenths(7547); /* 12:34.7 */
+	assert(scoreboard_write_all_files());
+	/* Same second on disk: sub-second precision is kept */
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_clock_get_tenths() == 7547);
+	/* Clock edited externally to a different time: adopted */
+	char path[512];
+	snprintf(path, sizeof(path), "%s/clock.txt", g_tmp_dir);
+	overwrite_file(path, "10:00");
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_clock_get_tenths() == 6000);
+	cleanup_tmp_dir();
+}
+
 static void test_write_all_files(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -1714,6 +1835,10 @@ static void test_penalty_label_format_save_load(void)
 int main(void)
 {
 	test_write_all_files();
+	test_read_keeps_clock_tenths_same_second();
+	test_write_skips_unchanged_files();
+	test_write_failure_invalidates_cache();
+	test_write_cache_periodic_refresh();
 	test_write_all_files_no_directory();
 	test_write_all_files_null_directory();
 	test_save_load_state();

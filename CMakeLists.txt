@@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.21)
 
 project(streamn_obs_scoreboard VERSION 0.8.0 LANGUAGES C CXX)
 
+# Version shown in the dock header, About dialog, OBS module description and
+# manifest.json. Defaults to PROJECT_VERSION; the release workflow passes
+# -DPLUGIN_VERSION_OVERRIDE=<tag without "v"> so builds always match the tag.
+set(PLUGIN_VERSION_OVERRIDE "" CACHE STRING
+  "Override the plugin version string (default: PROJECT_VERSION)")
+if(PLUGIN_VERSION_OVERRIDE)
+  set(PLUGIN_VERSION_STRING "${PLUGIN_VERSION_OVERRIDE}")
+else()
+  set(PLUGIN_VERSION_STRING "${PROJECT_VERSION}")
+endif()
+message(STATUS "Plugin version: ${PLUGIN_VERSION_STRING}")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)

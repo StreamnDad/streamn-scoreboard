@@ -145,6 +145,271 @@ static void test_set_sport_generic(void)
 	assert(scoreboard_get_clock_direction() == SCOREBOARD_CLOCK_COUNT_UP);
 }
 
+static void test_set_sport_futsal(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(strcmp(scoreboard_get_segment_name(), "Half") == 0);
+	/* Two 20-minute halves, running clock counts down */
+	assert(scoreboard_get_period_length() == 1200);
+	assert(scoreboard_get_clock_direction() ==
+	       SCOREBOARD_CLOCK_COUNT_DOWN);
+	scoreboard_clock_reset();
+	assert(scoreboard_clock_get_tenths() == 12000);
+	char buf[16];
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "20:00") == 0);
+	/* Accumulated team fouls, no shots/faceoffs/penalty timers */
+	assert(scoreboard_get_has_fouls() == true);
+	assert(strcmp(scoreboard_get_foul_label(), "Fouls") == 0);
+	assert(scoreboard_get_has_fouls2() == false);
+	assert(scoreboard_get_has_shots() == false);
+	assert(scoreboard_get_has_faceoffs() == false);
+	assert(scoreboard_get_has_penalties() == false);
+	assert(scoreboard_get_log_scores() == true);
+	assert(strcmp(scoreboard_get_score_label(), "Goal") == 0);
+	assert(scoreboard_get_base_strength() == 0);
+	/* Period labels: 1, 2, then two extra-time halves */
+	assert(scoreboard_get_period_label_count() == 4);
+	assert(strcmp(scoreboard_get_period_label(0), "1") == 0);
+	assert(strcmp(scoreboard_get_period_label(1), "2") == 0);
+	assert(strcmp(scoreboard_get_period_label(2), "OT") == 0);
+	assert(strcmp(scoreboard_get_period_label(3), "OT2") == 0);
+	/* Name round trip */
+	assert(strcmp(scoreboard_sport_name(SCOREBOARD_SPORT_FUTSAL),
+		      "futsal") == 0);
+	assert(scoreboard_sport_from_name("futsal") ==
+	       SCOREBOARD_SPORT_FUTSAL);
+}
+
+static void test_futsal_pads_minutes_by_default(void)
+{
+	char buf[16];
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+	scoreboard_clock_set_tenths(5400);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:00") == 0);
+	/* User can turn it off */
+	scoreboard_set_clock_pad_minutes(false);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "9:00") == 0);
+	/* Other sports default to off */
+	scoreboard_set_sport(SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == true);
+}
+
+static void test_clock_pad_minutes_persist(void)
+{
+	char path[256];
+	char dir[256];
+	char buf[16];
+	make_tmp_file(path, sizeof(path));
+	/* JSON: explicit value overrides the sport default */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_clock_pad_minutes(false);
+	assert(scoreboard_save_state(path));
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(path));
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_clock_pad_minutes() == false);
+	remove(path);
+
+	/* Text files: padded clock.txt reads back correctly */
+	make_tmp_dir(dir, sizeof(dir));
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(dir);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_clock_set_tenths(5430); /* 09:03 */
+	assert(scoreboard_write_all_files());
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_output_directory(dir);
+	assert(scoreboard_read_all_files());
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_clock_get_tenths() == 5430);
+	scoreboard_clock_format(buf, sizeof(buf));
+	assert(strcmp(buf, "09:03") == 0);
+	cleanup_dir(dir);
+}
+
+static void test_futsal_clock_capped_at_20(void)
+{
+	/* Arrow adjustments cannot exceed the 20:00 half length */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_clock_reset();
+	scoreboard_clock_adjust_minutes(1);
+	scoreboard_clock_adjust_seconds(1);
+	assert(scoreboard_clock_get_tenths() == 12000);
+	scoreboard_clock_adjust_seconds(-30);
+	scoreboard_clock_adjust_minutes(1);
+	assert(scoreboard_clock_get_tenths() == 12000);
+}
+
+static void test_futsal_fouls_reset_at_second_half(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(3);
+	/* 1st -> 2nd half: accumulated fouls reset */
+	scoreboard_period_advance();
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 0);
+	assert(scoreboard_get_away_fouls() == 0);
+	/* 2nd half -> extra time: count carries over */
+	scoreboard_set_home_fouls(4);
+	scoreboard_set_away_fouls(6);
+	scoreboard_period_advance();
+	assert(scoreboard_get_period() == 3);
+	assert(scoreboard_get_home_fouls() == 4);
+	assert(scoreboard_get_away_fouls() == 6);
+	/* Reset is logged in the action log */
+	char logs[4096];
+	scoreboard_copy_action_logs(logs, sizeof(logs));
+	assert(strstr(logs, "accumulated fouls reset") != NULL);
+}
+
+static void test_futsal_fouls_restored_on_rewind(void)
+{
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(3);
+	scoreboard_period_advance(); /* -> 2nd half, fouls reset */
+	scoreboard_increment_home_fouls(); /* 2nd-half foul */
+	scoreboard_period_rewind(); /* back to 1st half */
+	assert(scoreboard_get_period() == 1);
+	assert(scoreboard_get_home_fouls() == 5);
+	assert(scoreboard_get_away_fouls() == 3);
+	char logs[4096];
+	scoreboard_copy_action_logs(logs, sizeof(logs));
+	assert(strstr(logs, "fouls restored") != NULL);
+
+	/* Advance again: current 1st-half counts are saved, reset again */
+	scoreboard_set_home_fouls(6);
+	scoreboard_period_advance();
+	assert(scoreboard_get_home_fouls() == 0);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 6);
+	assert(scoreboard_get_away_fouls() == 3);
+
+	/* Rewind from 1st half again: nothing saved, no change */
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 6);
+}
+
+static void test_futsal_rewind_from_extra_time_keeps_fouls(void)
+{
+	/* OT -> 2nd half is not a half-time boundary: keep counts */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(2);
+	scoreboard_period_advance(); /* 2nd half */
+	scoreboard_period_advance(); /* OT */
+	scoreboard_set_home_fouls(4);
+	scoreboard_period_rewind(); /* back to 2nd half */
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 4);
+	scoreboard_period_rewind(); /* back to 1st: restore 1st-half value */
+	assert(scoreboard_get_home_fouls() == 2);
+}
+
+static void test_futsal_saved_fouls_cleared(void)
+{
+	/* New game discards the saved 1st-half counts */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_period_advance();
+	scoreboard_new_game();
+	scoreboard_set_period(2);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 0);
+
+	/* Switching sport discards them too */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_period_advance();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL); /* same sport: kept */
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_period(2);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 0);
+
+	/* Other sports never restore on rewind */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	scoreboard_set_home_fouls(3);
+	scoreboard_period_advance();
+	scoreboard_set_home_fouls(1);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 1);
+}
+
+static void test_futsal_saved_fouls_persist_json(void)
+{
+	char path[256];
+	make_tmp_file(path, sizeof(path));
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_FUTSAL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(2);
+	scoreboard_period_advance();
+	assert(scoreboard_save_state(path));
+
+	scoreboard_reset_state_for_tests();
+	assert(scoreboard_load_state(path));
+	assert(scoreboard_get_sport() == SCOREBOARD_SPORT_FUTSAL);
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 0);
+	scoreboard_period_rewind();
+	assert(scoreboard_get_home_fouls() == 5);
+	assert(scoreboard_get_away_fouls() == 2);
+	remove(path);
+}
+
+static void test_non_futsal_fouls_not_reset(void)
+{
+	/* Other sports keep their foul counts across periods */
+	scoreboard_reset_state_for_tests();
+	scoreboard_set_sport(SCOREBOARD_SPORT_BASKETBALL);
+	scoreboard_set_home_fouls(5);
+	scoreboard_set_away_fouls(3);
+	scoreboard_period_advance();
+	assert(scoreboard_get_period() == 2);
+	assert(scoreboard_get_home_fouls() == 5);
+	assert(scoreboard_get_away_fouls() == 3);
+}
+
+static void test_get_preset_for_sport(void)
+{
+	const struct scoreboard_sport_preset *p =
+		scoreboard_get_preset_for_sport(SCOREBOARD_SPORT_FUTSAL);
+	assert(p->sport == SCOREBOARD_SPORT_FUTSAL);
+	assert(p->duration_seconds == 1200);
+	assert(p->pad_clock_minutes == true);
+	p = scoreboard_get_preset_for_sport(SCOREBOARD_SPORT_SOCCER);
+	assert(p->sport == SCOREBOARD_SPORT_SOCCER);
+	/* Every entry sits at its own enum index */
+	for (int i = 0; i < SCOREBOARD_SPORT_COUNT; i++)
+		assert(scoreboard_get_preset_for_sport(
+			       (enum scoreboard_sport)i)->sport ==
+		       (enum scoreboard_sport)i);
+	/* Invalid values fall back to hockey */
+	assert(scoreboard_get_preset_for_sport((enum scoreboard_sport)-1)
+		       ->sport == SCOREBOARD_SPORT_HOCKEY);
+	assert(scoreboard_get_preset_for_sport((enum scoreboard_sport)99)
+		       ->sport == SCOREBOARD_SPORT_HOCKEY);
+}
+
 static void test_set_sport_invalid(void)
 {
 	scoreboard_reset_state_for_tests();
@@ -772,6 +1037,17 @@ int main(void)
 	test_set_sport_football();
 	test_set_sport_lacrosse();
 	test_set_sport_generic();
+	test_set_sport_futsal();
+	test_futsal_pads_minutes_by_default();
+	test_clock_pad_minutes_persist();
+	test_futsal_clock_capped_at_20();
+	test_futsal_fouls_reset_at_second_half();
+	test_futsal_fouls_restored_on_rewind();
+	test_futsal_rewind_from_extra_time_keeps_fouls();
+	test_futsal_saved_fouls_cleared();
+	test_futsal_saved_fouls_persist_json();
+	test_non_futsal_fouls_not_reset();
+	test_get_preset_for_sport();
 	test_set_sport_invalid();
 	test_sport_name_round_trip();
 	test_sport_from_name_null();
