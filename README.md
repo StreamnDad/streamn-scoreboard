@@ -45,11 +45,13 @@ For general information about installing OBS plugins, see the [OBS Plugins Guide
 ### macOS
 
 1. Download `streamn-obs-scoreboard-x.y.z-macos.pkg`
-2. **Right-click** (or Control-click) the `.pkg` file and choose **Open** — this is required because the package is not yet notarized with Apple. If you double-click instead, macOS will block it. You can also go to **System Settings > Privacy & Security** and click **Open Anyway** after a blocked attempt.
+2. Open the signed and notarized `.pkg` in Finder. Older unsigned releases may be blocked by Gatekeeper.
 3. Follow the installer prompts
 4. Restart OBS Studio
 
 The installer places the plugin in `~/Library/Application Support/obs-studio/plugins/streamn-obs-scoreboard.plugin/`.
+
+**Maintainers:** Once the release workflow is on the default branch, run **Actions → Release → Run workflow** to test the macOS signing and notarization with the repository’s Actions secrets. This uploads the verified `.pkg` as a workflow artifact without creating a GitHub Release. Download it and confirm it installs and loads in OBS before tagging a release.
 
 ### Windows
 

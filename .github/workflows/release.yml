@@ -3,170 +3,119 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-macos:
     name: Package (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         run: brew install cmake simde
 
-      - name: Install Qt 6.8.3
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-
-      - name: Clone OBS source (headers only)
-        run: |
-          git clone --depth 1 --branch 30.2.3 \
-            https://github.com/obsproject/obs-studio.git /tmp/obs-studio
-
-      - name: Locate OBS.app frameworks
+      - name: Fetch matching OBS and Qt build dependencies
         id: obs-paths
         run: |
-          OBS_APP="/Applications/OBS.app"
-          if [ ! -d "$OBS_APP" ]; then
-            curl -L -o /tmp/obs.dmg \
-              "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.2.3-macOS-Apple.dmg"
-            hdiutil attach /tmp/obs.dmg -nobrowse -mountpoint /tmp/obs-mount
-            cp -R /tmp/obs-mount/OBS.app /tmp/OBS.app
-            hdiutil detach /tmp/obs-mount
-            OBS_APP="/tmp/OBS.app"
-          fi
-          echo "obs_app=${OBS_APP}" >> "$GITHUB_OUTPUT"
-          echo "frameworks_dir=${OBS_APP}/Contents/Frameworks" >> "$GITHUB_OUTPUT"
+          git clone --depth 1 --branch 30.2.3 \
+            https://github.com/obsproject/obs-studio.git "$RUNNER_TEMP/obs-studio"
+          obs_dmg="$RUNNER_TEMP/obs.dmg"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/obsproject/obs-studio/releases/download/30.2.3/OBS-Studio-30.2.3-macOS-Apple.dmg \
+            --output "$obs_dmg"
+          printf '%s  %s\n' 6714f8fcbc8dc1f6b92ac1da58e2c7570dc65fefb819d68536375711973be0fb "$obs_dmg" | shasum -a 256 -c -
+          mountpoint="$RUNNER_TEMP/obs-mount"
+          hdiutil attach "$obs_dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          ditto "$mountpoint/OBS.app" "$RUNNER_TEMP/OBS.app"
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          echo "frameworks_dir=$RUNNER_TEMP/OBS.app/Contents/Frameworks" >> "$GITHUB_OUTPUT"
+
+          # Use the Qt build pinned by the OBS 30.2.3 buildspec.
+          qt_archive="$RUNNER_TEMP/obs-qt.tar.xz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/obsproject/obs-deps/releases/download/2024-05-08/macos-deps-qt6-2024-05-08-universal.tar.xz \
+            --output "$qt_archive"
+          printf '%s  %s\n' 248fb342e7ddf574af0960aaedeffb832deda1485dc81583302646e979593a6e "$qt_archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/obs-qt"
+          tar -xf "$qt_archive" -C "$RUNNER_TEMP/obs-qt"
+          qt_config="$(find "$RUNNER_TEMP/obs-qt" -name Qt6Config.cmake -print -quit)"
+          test -n "$qt_config"
+          echo "qt6_dir=$(dirname "$qt_config")" >> "$GITHUB_OUTPUT"
 
       - name: Configure
+        env:
+          OBS_FRAMEWORKS_DIR: ${{ steps.obs-paths.outputs.frameworks_dir }}
+          QT6_DIR: ${{ steps.obs-paths.outputs.qt6_dir }}
         run: |
           cmake --preset default \
-            -DOBS_INCLUDE_DIR=/tmp/obs-studio/libobs \
-            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.frameworks_dir }}/libobs.framework/libobs" \
-            -DOBS_SOURCE_DIR=/tmp/obs-studio \
-            -DOBS_FRAMEWORKS_DIR="${{ steps.obs-paths.outputs.frameworks_dir }}"
+            -DOBS_INCLUDE_DIR="$RUNNER_TEMP/obs-studio/libobs" \
+            -DOBS_LIBRARY="$OBS_FRAMEWORKS_DIR/libobs.framework/libobs" \
+            -DOBS_SOURCE_DIR="$RUNNER_TEMP/obs-studio" \
+            -DOBS_FRAMEWORKS_DIR="$OBS_FRAMEWORKS_DIR" \
+            -DQt6_DIR="$QT6_DIR" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
+            '-DCMAKE_INSTALL_RPATH=@executable_path/../Frameworks'
 
       - name: Build
         run: cmake --build build
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
-
-      - name: Stage scripts and payload
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          mkdir -p /tmp/pkg-scripts
-          cp build/streamn-obs-scoreboard.so /tmp/pkg-scripts/streamn-obs-scoreboard
-          chmod +x /tmp/pkg-scripts/streamn-obs-scoreboard
-          cp build/data/manifest.json /tmp/pkg-scripts/manifest.json
-          cat > /tmp/pkg-scripts/Info.plist <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleExecutable</key>
-            <string>streamn-obs-scoreboard</string>
-            <key>CFBundleIdentifier</key>
-            <string>com.streamndad.streamn-obs-scoreboard</string>
-            <key>CFBundleInfoDictionaryVersion</key>
-            <string>6.0</string>
-            <key>CFBundleName</key>
-            <string>streamn-obs-scoreboard</string>
-            <key>CFBundlePackageType</key>
-            <string>BNDL</string>
-            <key>CFBundleShortVersionString</key>
-            <string>${VERSION}</string>
-            <key>CFBundleVersion</key>
-            <string>${VERSION}</string>
-            <key>LSMinimumSystemVersion</key>
-            <string>11.0</string>
-          </dict>
-          </plist>
-          PLIST
-          cat > /tmp/pkg-scripts/postinstall <<'SCRIPT'
-          #!/bin/bash
-          SCRIPT_DIR="$(dirname "$0")"
-          if [ -n "${HOME}" ] && [ "${HOME}" != "/var/root" ]; then
-            REAL_HOME="${HOME}"
-          elif [ -n "${SUDO_USER}" ]; then
-            REAL_HOME=$(eval echo "~${SUDO_USER}")
-          else
-            REAL_HOME=$(eval echo "~${USER}")
-          fi
-          DEST="${REAL_HOME}/Library/Application Support/obs-studio/plugins"
-          BUNDLE="${DEST}/streamn-obs-scoreboard.plugin"
-          mkdir -p "$DEST"
-          rm -rf "${DEST}/streamn-obs-scoreboard"
-          rm -rf "${BUNDLE}"
-          mkdir -p "${BUNDLE}/Contents/MacOS"
-          mkdir -p "${BUNDLE}/Contents/Resources"
-          cp "${SCRIPT_DIR}/streamn-obs-scoreboard" "${BUNDLE}/Contents/MacOS/"
-          cp "${SCRIPT_DIR}/Info.plist" "${BUNDLE}/Contents/"
-          if [ -f "${SCRIPT_DIR}/manifest.json" ]; then
-            cp "${SCRIPT_DIR}/manifest.json" "${BUNDLE}/Contents/Resources/"
-          fi
-          OWNER=$(stat -f '%Su' "${REAL_HOME}")
-          chown -R "${OWNER}" "${BUNDLE}"
-          SCRIPT
-          chmod +x /tmp/pkg-scripts/postinstall
+          ctest --test-dir build --output-on-failure
+          # The host supplies OBS and Qt. Reject any build-machine dylib path.
+          otool -L build/streamn-obs-scoreboard.so | awk '
+            /^[[:space:]]+\// && $1 !~ /^\/(usr\/lib|System\/Library)\// {
+              print "Non-portable dependency: " $1; failed = 1
+            }
+            END { exit failed }'
+          test "$(otool -l build/streamn-obs-scoreboard.so | awk '
+            /cmd LC_RPATH$/ { rpath = 1 }
+            rpath && $1 == "path" { print $2; rpath = 0 }')" = '@executable_path/../Frameworks'
+          bash scripts/test-macos-release-package.sh
 
-      - name: Code sign (optional)
-        if: env.MACOS_SIGNING_CERT != ''
+      - name: Sign, notarize, and verify macOS installer
         env:
           MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          echo "$MACOS_SIGNING_CERT" | base64 --decode > /tmp/cert.p12
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import /tmp/cert.p12 -k build.keychain \
-            -P "$MACOS_SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "" build.keychain
-          codesign --force --sign "$MACOS_SIGNING_IDENTITY" \
-            --options runtime /tmp/pkg-scripts/streamn-obs-scoreboard
-
-      - name: Package .pkg
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          pkgbuild \
-            --nopayload \
-            --scripts /tmp/pkg-scripts \
-            --identifier com.streamndad.streamn-obs-scoreboard \
-            --version "$VERSION" \
-            "streamn-obs-scoreboard-${VERSION}-macos.pkg"
-
-      - name: Notarize (optional)
-        if: env.MACOS_NOTARIZE_APPLE_ID != ''
-        env:
+          MACOS_INSTALLER_SIGNING_CERT: ${{ secrets.MACOS_INSTALLER_SIGNING_CERT }}
+          MACOS_INSTALLER_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_SIGNING_CERT_PASSWORD }}
+          MACOS_INSTALLER_SIGNING_IDENTITY: ${{ secrets.MACOS_INSTALLER_SIGNING_IDENTITY }}
           MACOS_NOTARIZE_APPLE_ID: ${{ secrets.MACOS_NOTARIZE_APPLE_ID }}
           MACOS_NOTARIZE_PASSWORD: ${{ secrets.MACOS_NOTARIZE_PASSWORD }}
           MACOS_NOTARIZE_TEAM_ID: ${{ secrets.MACOS_NOTARIZE_TEAM_ID }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          xcrun notarytool submit \
-            "streamn-obs-scoreboard-${VERSION}-macos.pkg" \
-            --apple-id "$MACOS_NOTARIZE_APPLE_ID" \
-            --password "$MACOS_NOTARIZE_PASSWORD" \
-            --team-id "$MACOS_NOTARIZE_TEAM_ID" \
-            --wait
-          xcrun stapler staple \
-            "streamn-obs-scoreboard-${VERSION}-macos.pkg"
+          bundle_version="$(plutil -extract version raw build/data/manifest.json)"
+          artifact_version="$bundle_version"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            artifact_version="${GITHUB_REF_NAME#v}"
+          fi
+          bash scripts/sign-macos-release-ci.sh "$bundle_version" \
+            build/streamn-obs-scoreboard.so build/data/manifest.json \
+            "streamn-obs-scoreboard-${artifact_version}-macos.pkg"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
           path: streamn-obs-scoreboard-*-macos.pkg
+          if-no-files-found: error
 
   build-linux:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     name: Package (Linux)
     runs-on: ubuntu-24.04
     steps:
@@ -251,6 +200,7 @@ jobs:
           path: streamn-obs-scoreboard-*-linux-x86_64.tar.gz
 
   build-windows:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     name: Package (Windows)
     runs-on: windows-latest
     steps:
@@ -356,6 +306,9 @@ jobs:
           path: streamn-obs-scoreboard-*-windows-x64.zip
 
   create-release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: write
     name: Create Release
     needs: [build-macos, build-linux, build-windows]
     runs-on: ubuntu-24.04
