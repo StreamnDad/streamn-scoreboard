@@ -1,0 +1,94 @@
+name: OBS 33 Compatibility
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/obs33.yml'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - 'cmake/**'
+      - 'data/**'
+      - 'include/**'
+      - 'scripts/run-obs.sh'
+      - 'scripts/test-macos-obs-load.sh'
+      - 'scripts/test-run-obs.sh'
+      - 'src/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-obs33:
+    name: OBS 33.0.3 (macOS arm64)
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
+    env:
+      OBS_VERSION: '33.0.3'
+      OBS_COMMIT: f2aa9ce69caa7239ef26660b5889de4f53d9880e
+      OBS_QT_VERSION: '2026-10-23'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: brew install cmake simde
+
+      - name: Fetch matching OBS sources, app bundle, and Qt SDK
+        run: |
+          git clone --depth 1 --branch "$OBS_VERSION" \
+            https://github.com/obsproject/obs-studio.git "$RUNNER_TEMP/obs-studio"
+          test "$(git -C "$RUNNER_TEMP/obs-studio" rev-parse HEAD)" = "$OBS_COMMIT"
+
+          obs_dmg="$RUNNER_TEMP/obs.dmg"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/obsproject/obs-studio/releases/download/$OBS_VERSION/OBS-Studio-$OBS_VERSION-macOS-Apple.dmg" \
+            --output "$obs_dmg"
+          printf '%s  %s\n' 92212873b6f84c54285203cac3f846590ac00dfad76b312cf266100ff5edf0c8 "$obs_dmg" | shasum -a 256 -c -
+          mountpoint="$RUNNER_TEMP/obs-mount"
+          hdiutil attach "$obs_dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          ditto "$mountpoint/OBS.app" "$RUNNER_TEMP/OBS.app"
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          test "$(plutil -extract CFBundleShortVersionString raw "$RUNNER_TEMP/OBS.app/Contents/Info.plist")" = "$OBS_VERSION"
+
+          # OBS 33.0.3 pins this Qt archive in its CMakePresets.json.
+          qt_archive="$RUNNER_TEMP/obs-qt.tar.xz"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/obsproject/obs-deps/releases/download/$OBS_QT_VERSION/macos-deps-qt6-$OBS_QT_VERSION-universal.tar.xz" \
+            --output "$qt_archive"
+          printf '%s  %s\n' b216560cea8497207f9fc350c713716fb84aec6b973bb0ff8ac6add7734abad5 "$qt_archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/obs-qt"
+          tar -xf "$qt_archive" -C "$RUNNER_TEMP/obs-qt"
+
+      - name: Build with the OBS 33 SDK
+        run: |
+          obs_source="$RUNNER_TEMP/obs-studio"
+          frameworks="$RUNNER_TEMP/OBS.app/Contents/Frameworks"
+          qt_config="$(find "$RUNNER_TEMP/obs-qt" -name Qt6Config.cmake -print -quit)"
+          test -n "$qt_config"
+          cmake --preset default -B build-obs33 \
+            -DOBS_SOURCE_DIR="$obs_source" \
+            -DOBS_INCLUDE_DIR="$obs_source/libobs" \
+            -DOBS_FRAMEWORKS_DIR="$frameworks" \
+            -DOBS_LIBRARY="$frameworks/libobs.framework/libobs" \
+            -DOBS_FRONTEND_API_LIBRARY="$frameworks/obs-frontend-api.dylib" \
+            -DQt6_DIR="$(dirname "$qt_config")" \
+            -DCMAKE_REQUIRE_FIND_PACKAGE_Qt6=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
+            '-DCMAKE_INSTALL_RPATH=@executable_path/../Frameworks'
+          cmake --build build-obs33 --parallel
+
+      - name: Test module linkage and launcher
+        run: |
+          ctest --test-dir build-obs33 --output-on-failure
+          bash scripts/test-macos-obs-load.sh "$RUNNER_TEMP/OBS.app" \
+            build-obs33/streamn-obs-scoreboard.so "$OBS_VERSION"
+          bash scripts/test-run-obs.sh

@@ -392,6 +392,11 @@ endif()
 
 enable_testing()
 
+add_test(
+  NAME plugin-archive-layouts
+  COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test-plugin-archive-layouts.cmake
+)
+
 function(add_core_test test_target test_source)
   add_executable(${test_target}
     ${test_source}

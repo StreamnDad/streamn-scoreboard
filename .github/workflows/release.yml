@@ -139,16 +139,12 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-      - name: Package .tar.gz
+      - name: Package OBS 33 and legacy archives
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          STAGING="/tmp/tar-root/streamn-obs-scoreboard"
-          mkdir -p "$STAGING/bin/64bit"
-          mkdir -p "$STAGING/data"
-          cp build/streamn-obs-scoreboard.so "$STAGING/bin/64bit/"
-          cp build/data/manifest.json "$STAGING/data/"
-          tar -czf "streamn-obs-scoreboard-${VERSION}-linux-x86_64.tar.gz" \
-            -C /tmp/tar-root streamn-obs-scoreboard
+          cmake -DPLUGIN_BINARY=build/streamn-obs-scoreboard.so \
+            -DPLUGIN_MANIFEST=build/data/manifest.json \
+            "-DPACKAGE_VERSION=${GITHUB_REF_NAME#v}" -DPACKAGE_OUTPUT_DIRECTORY=. \
+            -P cmake/package-plugin-archives.cmake
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -243,18 +239,14 @@ jobs:
             build/RelWithDebInfo/streamn-obs-scoreboard.dll
           Remove-Item cert.pfx
 
-      - name: Package .zip
+      - name: Package OBS 33 and legacy archives
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          $binDir = "pkg-root/streamn-obs-scoreboard/bin/64bit"
-          $dataDir = "pkg-root/streamn-obs-scoreboard/data"
-          New-Item -ItemType Directory -Force -Path $binDir
-          New-Item -ItemType Directory -Force -Path $dataDir
-          Copy-Item "build/RelWithDebInfo/streamn-obs-scoreboard.dll" $binDir
-          Copy-Item "build/data/manifest.json" $dataDir
-          Compress-Archive -Path "pkg-root/streamn-obs-scoreboard" `
-            -DestinationPath "streamn-obs-scoreboard-${version}-windows-x64.zip"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          cmake -DPLUGIN_BINARY=build/RelWithDebInfo/streamn-obs-scoreboard.dll `
+            -DPLUGIN_MANIFEST=build/data/manifest.json `
+            "-DPACKAGE_VERSION=$version" -DPACKAGE_OUTPUT_DIRECTORY=. `
+            -P cmake/package-plugin-archives.cmake
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

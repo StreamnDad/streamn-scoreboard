@@ -30,7 +30,7 @@ Build your own scorebug overlay using OBS Text sources pointed at the output fil
 
 ## Compatibility
 
-- **OBS Studio** 30.0+ (Qt5/Qt6); embedded recording chapters require OBS 32+ with Hybrid MP4 output
+- **OBS Studio** 30.0+ with Qt 6. Embedded recording chapters require OBS 32+ with Hybrid MP4 output.
 - **macOS** (Apple Silicon and Intel)
 - **Windows** (x64)
 - **Linux** (x86_64)
@@ -38,7 +38,7 @@ Build your own scorebug overlay using OBS Text sources pointed at the output fil
 
 ## Installation
 
-Download the latest release for your platform from the [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases) page. Each download contains a single plugin file (`.so`, `.dll`, or `.pkg`) that you copy into your OBS plugins folder.
+Download the latest release for your platform and OBS version from the [Releases](https://github.com/StreamnDad/streamn-scoreboard/releases) page.
 
 For general information about installing OBS plugins, see the [OBS Plugins Guide](https://obsproject.com/kb/plugins-guide).
 
@@ -55,19 +55,16 @@ The installer places the plugin in `~/Library/Application Support/obs-studio/plu
 
 ### Windows
 
-1. Download `streamn-obs-scoreboard-x.y.z-windows-x64.zip`
-2. Extract the `streamn-obs-scoreboard` folder to your OBS plugins directory:
-   - **Recommended:** `C:\ProgramData\obs-studio\plugins\`
-   - **Alternative:** Copy just the `.dll` from `bin\64bit\` to `C:\Program Files\obs-studio\obs-plugins\64bit\`
-3. Restart OBS Studio
+1. Close OBS Studio. For **OBS 33 and newer**, download `streamn-obs-scoreboard-x.y.z-obs33-windows-x64.zip`. For **OBS 30–32**, use `streamn-obs-scoreboard-x.y.z-windows-x64.zip`.
+2. Extract the entire `streamn-obs-scoreboard` folder into `%ProgramData%\obs-studio\plugins\` (`C:\ProgramData\obs-studio\plugins\` by default). For an OBS 33 portable install, use the `plugins\` directory in the portable OBS root instead.
+3. The OBS 33 archive places the DLL next to `data\`. The OBS 30–32 archive places it under `bin\64bit\`. If upgrading from OBS 30–32, replace the old plugin folder with the new one before restarting OBS.
 
 ### Linux
 
-1. Download `streamn-obs-scoreboard-x.y.z-linux-x86_64.tar.gz`
-2. Extract the `streamn-obs-scoreboard` folder to your OBS plugins directory:
-   - **Per-user:** `~/.config/obs-studio/plugins/`
-   - **Alternative:** Copy just the `.so` from `bin/64bit/` to `/usr/lib/obs-plugins/`
-3. Restart OBS Studio
+1. Close OBS Studio and choose the archive for your native Linux install.
+   - **OBS 33 and newer** — Extract `streamn-obs-scoreboard-x.y.z-obs33-linux-x86_64.tar.gz` into `${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/`. The shared library goes next to `data/` inside `streamn-obs-scoreboard/`.
+   - **OBS 30–32** — Extract `streamn-obs-scoreboard-x.y.z-linux-x86_64.tar.gz` into `${XDG_CONFIG_HOME:-$HOME/.config}/obs-studio/plugins/`. The shared library goes under `bin/64bit/` inside `streamn-obs-scoreboard/`.
+2. If upgrading to OBS 33, remove the older copy from its previous plugin directory. Then restart OBS.
 
 ### After installation
 
@@ -82,14 +79,7 @@ The installer places the plugin in `~/Library/Application Support/obs-studio/plu
 rm -rf ~/Library/Application\ Support/obs-studio/plugins/streamn-obs-scoreboard.plugin
 ```
 
-**Windows:** Delete `streamn-obs-scoreboard.dll` from your OBS plugins folder.
-
-**Linux:**
-```bash
-rm -rf ~/.config/obs-studio/plugins/streamn-obs-scoreboard
-# or, if installed system-wide:
-sudo rm /usr/lib/obs-plugins/streamn-obs-scoreboard.so
-```
+**Windows and Linux** — Remove the installed `streamn-obs-scoreboard` directory. If you previously copied only the binary into a system `obs-plugins` directory, remove that copy too.
 
 Restart OBS after uninstalling.
 
@@ -103,16 +93,18 @@ make dev OBS_INCLUDE_DIR=/path/to/obs/include OBS_LIBRARY=/path/to/libobs
 make install
 
 # Linux
-sudo apt install libobs-dev qtbase5-dev libsimde-dev ninja-build
+sudo apt install libobs-dev qt6-base-dev libsimde-dev ninja-build
 cmake --preset linux
 cmake --build build
 ctest --test-dir build
 
-# Windows (requires Visual Studio 2022, Qt5, OBS SDK)
+# Windows (requires Visual Studio 2022, Qt 6, OBS SDK)
 cmake --preset windows -DOBS_INCLUDE_DIR=... -DOBS_LIBRARY=... -DCMAKE_PREFIX_PATH=...
 cmake --build build --config RelWithDebInfo
 ctest --test-dir build -C RelWithDebInfo
 ```
+
+Use the Qt version supplied with the OBS build you're targeting. For macOS development, run `make install` before `make run` so OBS can discover the bundle in its normal plugin folder. To test a staged bundle with OBS 33, set `OBS_PLUGINS_PATH` to the single directory containing the `.plugin` bundle. Set `OBS_APP_PATH` to the executable inside a different `OBS.app` to launch that copy.
 
 ## Text Files
 
