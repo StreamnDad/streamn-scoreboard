@@ -16,9 +16,9 @@ jobs:
         include:
           - os: ubuntu-24.04
             preset: linux
-          - os: macos-14
+          - os: macos-15
             preset: default
-          - os: windows-latest
+          - os: windows-2022
             preset: windows
     steps:
       - uses: actions/checkout@v4
@@ -38,48 +38,24 @@ jobs:
 
   build-macos:
     name: Build (macOS)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install cmake simde qt@5
+        run: brew install cmake simde
 
-      - name: Clone OBS source (headers only)
-        run: |
-          git clone --depth 1 --branch 30.2.3 \
-            https://github.com/obsproject/obs-studio.git /tmp/obs-studio
-
-      - name: Locate OBS.app frameworks
-        id: obs-paths
-        run: |
-          OBS_APP="/Applications/OBS.app"
-          if [ ! -d "$OBS_APP" ]; then
-            echo "OBS.app not found — downloading release DMG"
-            curl -L -o /tmp/obs.dmg \
-              "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.2.3-macOS-Apple.dmg"
-            hdiutil attach /tmp/obs.dmg -nobrowse -mountpoint /tmp/obs-mount
-            cp -R /tmp/obs-mount/OBS.app /tmp/OBS.app
-            hdiutil detach /tmp/obs-mount
-            OBS_APP="/tmp/OBS.app"
-          fi
-          echo "obs_app=${OBS_APP}" >> "$GITHUB_OUTPUT"
-          echo "frameworks_dir=${OBS_APP}/Contents/Frameworks" >> "$GITHUB_OUTPUT"
-
-      - name: Configure
-        run: |
-          cmake --preset default \
-            -DOBS_INCLUDE_DIR=/tmp/obs-studio/libobs \
-            -DOBS_LIBRARY="${{ steps.obs-paths.outputs.frameworks_dir }}/libobs.framework/libobs" \
-            -DOBS_SOURCE_DIR=/tmp/obs-studio \
-            -DOBS_FRAMEWORKS_DIR="${{ steps.obs-paths.outputs.frameworks_dir }}" \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@5)"
+      - name: Configure against OBS 30.2.3 and matching Qt
+        run: bash scripts/configure-macos-obs30-ci.sh
 
       - name: Build
         run: cmake --build build
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+      - name: Test macOS installer packaging
+        run: bash scripts/test-macos-release-package.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -173,7 +149,7 @@ jobs:
 
   build-windows:
     name: Build (Windows)
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
